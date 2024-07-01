@@ -42,7 +42,9 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
         int log2_tid = floor_log2(tid + 1);
         int log2_n = floor_log2(n);
         int index =  ((2 * (tid + 1  - (1<<log2_tid))) + 1) * (1 << log2_n) / (1 << log2_tid);
-        index--;
+        int index2 = min(index, index - (index/2) + (n + 1 - (1<< log2_n)));
+        index2--;
+
 
         // # if __CUDA_ARCH__>=200
         //     printf("tid is %d \n", tid + 1);
@@ -53,9 +55,9 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
         // #endif
 
         // Ensure index is within bounds
-        if (index - 1 < n) {
-            nodes[tid].index = indices[index];
-            nodes[tid].value = values[index];
+        if (index2 - 1 < n) {
+            nodes[tid].index = indices[index2];
+            nodes[tid].value = values[index2];
         }
     }
 }
@@ -68,16 +70,6 @@ __global__ void colorNodes(RBTreeNode* nodes, int n) {
     }
 }
 
-// Function to print the tree in-order
-void printTree(RBTreeNode* nodes, int index, int n) {
-    if (index >= n) return;
-    std::cout << "Index: " << nodes[index].index << ", Value: " << nodes[index].value << ", Color: " << (nodes[index].color ? "Black" : "Red") << std::endl;
-
-    if (nodes[index].left != nullptr)
-        printTree(nodes, nodes[index].left - nodes, n);
-    if (nodes[index].right != nullptr)
-        printTree(nodes, nodes[index].right - nodes, n);
-}
 
 void constructRedBlackTree(int* h_indices, int* h_values, int n) {
     RBTreeNode* d_nodes;
@@ -117,10 +109,6 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n) {
         << ", Color = " << (h_nodes[i].color ? "Black" : "Red") << std::endl;
     }
 
-    // Print the tree
-    //std::cout << "Red-Black Tree:" << std::endl;
-    //printTree(h_nodes, 0, n);
-
     // Free device memory
     cudaFree(d_indices);
     cudaFree(d_values);
@@ -130,9 +118,9 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n) {
 }
 
 int main() {
-    int n = 7;
-    int h_indices[] = {1, 2, 3, 4, 5, 6, 7}; // Example indices
-    int h_values[] = {10, 20, 30, 40, 50, 60, 70}; // Example values
+    int n = 8;
+    int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
+    int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
 
     constructRedBlackTree(h_indices, h_values, n);
 
