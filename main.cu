@@ -2,6 +2,66 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
+
+//Function to create a random 2-D vector
+std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
+    std::vector<std::vector<int>> vec2d(n);
+    std::srand(std::time(0)); // Seed for random number generation
+
+    for (int i = 0; i < n; ++i) {
+        int innerSize = rand() % m + 1; // Random inner size from 1 to m
+        vec2d[i].resize(innerSize);
+        for (int j = 0; j < innerSize; ++j) {
+            vec2d[i][j] = rand() % (r2 - r1 + 1) + r1; // Random value in range [r1, r2]
+        }
+    }
+
+    return vec2d;
+}
+
+std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
+    std::vector<int> vec1d;
+    std::vector<int> vec2dto1d(vec2d.size());
+
+    int index = 0;
+    for (size_t i = 0; i < vec2d.size(); ++i) {
+        vec2dto1d[i] = index;
+        for (size_t j = 0; j < vec2d[i].size(); ++j) {
+            vec1d.push_back(vec2d[i][j]);
+            ++index;
+        }
+    }
+
+    return {vec1d, vec2dto1d};
+}
+
+void print2DVector(const std::vector<std::vector<int>>& vec2d) {
+    std::cout << "2D Vector (Matrix Form):" << std::endl;
+    for (const auto& row : vec2d) {
+        for (int val : row) {
+            std::cout << val << " ";
+        }
+        std::cout << std::endl;
+    }
+}
+
+void printVector(const std::vector<int>& vec, const std::string& name) {
+    std::cout << name << ": [ ";
+    for (int val : vec) {
+        std::cout << val << " ";
+    }
+    std::cout << "]" << std::endl;
+}
+
+void checkCuda(cudaError_t result) {
+    if (result != cudaSuccess) {
+        std::cerr << "CUDA Runtime Error: " << cudaGetErrorString(result) << std::endl;
+        exit(-1);
+    }
+}
+
 
 __device__ int ceil_log2(int x) {
     int log = 0;
@@ -76,31 +136,31 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n) {
     int* d_indices;
     int* d_values;
 
-    cudaMalloc(&d_nodes, n * sizeof(RBTreeNode));
-    cudaMalloc(&d_indices, n * sizeof(int));
-    cudaMalloc(&d_values, n * sizeof(int));
+    checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_indices, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_values, n * sizeof(int)));
 
-    cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice);
+    checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
 
     int blockSize = 256;
     int numBlocks = (n + blockSize - 1) / blockSize;
 
     // Step 1: Build the empty binary tree
     buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes, n);
-    cudaDeviceSynchronize();
+    checkCuda(cudaDeviceSynchronize());
 
     // Step 2: Store items into internal nodes
     storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_indices, d_values, n);
-    cudaDeviceSynchronize();
+    checkCuda(cudaDeviceSynchronize());
 
     // Step 3: Color the nodes
     colorNodes<<<numBlocks, blockSize>>>(d_nodes, n);
-    cudaDeviceSynchronize();
+    checkCuda(cudaDeviceSynchronize());
 
     // Transfer the tree back to the host
     RBTreeNode* h_nodes = new RBTreeNode[n];
-    cudaMemcpy(h_nodes, d_nodes, n * sizeof(RBTreeNode), cudaMemcpyDeviceToHost);
+    checkCuda(cudaMemcpy(h_nodes, d_nodes, n * sizeof(RBTreeNode), cudaMemcpyDeviceToHost));
 
     std::cout << "Nodes after synchronization:" << std::endl;
     for (int i = 0; i < n; ++i) {
@@ -110,17 +170,37 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n) {
     }
 
     // Free device memory
-    cudaFree(d_indices);
-    cudaFree(d_values);
-    cudaFree(d_nodes);
+    checkCuda(cudaFree(d_indices));
+    checkCuda(cudaFree(d_values));
+    checkCuda(cudaFree(d_nodes));
 
     delete[] h_nodes;
 }
 
 int main() {
     int n = 8;
-    int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
-    int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
+    // int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
+    // int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
+
+    std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
+    
+
+    print2DVector(random2DVec);
+
+    // Flatten the 2D vector
+    auto flattened = flatten2DVector(random2DVec);
+    std::vector<int> flatValues = flattened.first;
+    std::vector<int> flatIndices = flattened.second;
+
+    // Print the flattened vectors
+    printVector(flatValues, "Flattened Values (vec1d)");
+    printVector(flatIndices, "Flattened Indices (vec2dto1d)");
+
+    int* h_values = flatIndices.data();
+    int* h_indices = new int[flatIndices.size()];
+    for (size_t i = 0; i < flatIndices.size(); ++i) {
+        h_indices[i] = i + 1;
+    }
 
     constructRedBlackTree(h_indices, h_values, n);
 
