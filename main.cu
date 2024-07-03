@@ -131,17 +131,20 @@ __global__ void colorNodes(RBTreeNode* nodes, int n) {
 }
 
 
-void constructRedBlackTree(int* h_indices, int* h_values, int n) {
+void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize) {
     RBTreeNode* d_nodes;
     int* d_indices;
     int* d_values;
+    int* d_flatValues;
 
     checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
     checkCuda(cudaMalloc(&d_indices, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_values, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_flatValues, flatValuesSize * sizeof(int)));
 
     checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_flatValues, flatValues, flatValuesSize * sizeof(int), cudaMemcpyHostToDevice));
 
     int blockSize = 256;
     int numBlocks = (n + blockSize - 1) / blockSize;
@@ -165,23 +168,22 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n) {
     std::cout << "Nodes after synchronization:" << std::endl;
     for (int i = 0; i < n; ++i) {
         std::cout << "Node " << i << ": Index = " << h_nodes[i].index
-        << ", Value = " << h_nodes[i].value
-        << ", Color = " << (h_nodes[i].color ? "Black" : "Red") << std::endl;
+                  << ", Value = " << h_nodes[i].value
+                  << ", Color = " << (h_nodes[i].color ? "Black" : "Red") << std::endl;
     }
 
     // Free device memory
     checkCuda(cudaFree(d_indices));
     checkCuda(cudaFree(d_values));
     checkCuda(cudaFree(d_nodes));
+    checkCuda(cudaFree(d_flatValues));
 
     delete[] h_nodes;
 }
 
+
 int main() {
     int n = 8;
-    // int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
-    // int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
-
     std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
     
 
@@ -202,7 +204,10 @@ int main() {
         h_indices[i] = i + 1;
     }
 
-    constructRedBlackTree(h_indices, h_values, n);
+    // int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
+    // int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
+
+    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size());
 
     return 0;
 }
