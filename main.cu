@@ -91,6 +91,7 @@ __device__ int floor_log2(int x) {
 struct RBTreeNode {
     int index;
     int value;
+    int length;
     bool color; // Red or Black
     RBTreeNode* left;
     RBTreeNode* right;
@@ -109,7 +110,7 @@ __global__ void buildEmptyBinaryTree(RBTreeNode* nodes, int n) {
 }
 
 // Kernel to store items into internal nodes
-__global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values, int n) {
+__global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values, int n, int totalSize) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < n) {
         int log2_tid = floor_log2(tid + 1);
@@ -127,10 +128,15 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
         //     printf("size is %d \n", n);
         // #endif
 
-        // Ensure index is within bounds
-        if (index2 - 1 < n) {
+
+        if (index2 < n) {
             nodes[tid].index = indices[index2];
             nodes[tid].value = values[index2];
+            if (index2 < n - 1) {
+                nodes[tid].length = values[index2 + 1] - values[index2];
+            } else {
+                nodes[tid].length = totalSize - values[index2];
+            }
         }
     }
 }
@@ -157,8 +163,8 @@ __global__ void printEachNode(RBTreeNode* nodes, int n) {
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Color = %s\n",
-                   tid, current->index, current->value, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
+                   tid, current->index, current->value, current->length, current->color ? "Black" : "Red");
         }
     }
 }
@@ -176,8 +182,8 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Color = %s\n",
-                   searchIndex, current->index, current->value, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
+                   searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
         } else {
             printf("Node %d: Not Found\n", searchIndex);
         }
@@ -207,7 +213,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaDeviceSynchronize());
 
     // Step 2: Store items into internal nodes
-    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_indices, d_values, n);
+    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_indices, d_values, n, flatValuesSize);
     checkCuda(cudaDeviceSynchronize());
 
     // Step 3: Color the nodes
@@ -219,13 +225,12 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     printEachNode<<<numBlocks, blockSize>>>(d_nodes, n);
     checkCuda(cudaDeviceSynchronize());
 
-
+    // Search for nodes in parallel
     std::vector<int> searchVector = {0, 3, 6, 9};
     int* d_searchVector;
     checkCuda(cudaMalloc(&d_searchVector, searchVector.size() * sizeof(int)));
     checkCuda(cudaMemcpy(d_searchVector, searchVector.data(), searchVector.size() * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Search for the nodes in parallel
     std::cout << "Searching for nodes in the tree:" << std::endl;
     findNode<<<(searchVector.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_searchVector, searchVector.size());
     checkCuda(cudaDeviceSynchronize());
@@ -236,17 +241,13 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaFree(d_values));
     checkCuda(cudaFree(d_nodes));
     checkCuda(cudaFree(d_flatValues));
-
-    
 }
-
 
 
 
 int main() {
     int n = 8;
     std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
-    
 
     print2DVector(random2DVec);
 
@@ -265,10 +266,8 @@ int main() {
         h_indices[i] = i + 1;
     }
 
-    // int h_indices[] = {1, 2, 3, 4, 5, 6, 7, 8}; // Example indices
-    // int h_values[] = {10, 20, 30, 40, 50, 60, 70, 80}; // Example values
-
     constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size());
 
+    delete[] h_indices;
     return 0;
 }
