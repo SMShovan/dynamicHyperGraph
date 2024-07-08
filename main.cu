@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <climits>
 
 //Function to create a random 2-D vector
 std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
@@ -37,6 +38,8 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
         for (int j = 0; j < paddedSize; ++j) {
             if (j < innerSize) {
                 vec1d.push_back(vec2d[i][j]);
+            } else if (j == paddedSize - 1) {
+                vec1d.push_back(INT_MIN); // Padding with negative infinity
             } else {
                 vec1d.push_back(0); // Padding with zeros
             }
