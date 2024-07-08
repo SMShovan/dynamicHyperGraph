@@ -21,6 +21,10 @@ std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2)
     return vec2d;
 }
 
+int nextMultipleOf32(int num) {
+    return ((num + 31) / 32) * 32;
+}
+
 std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
     std::vector<int> vec1d;
     std::vector<int> vec2dto1d(vec2d.size());
@@ -28,8 +32,14 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
     int index = 0;
     for (size_t i = 0; i < vec2d.size(); ++i) {
         vec2dto1d[i] = index;
-        for (size_t j = 0; j < vec2d[i].size(); ++j) {
-            vec1d.push_back(vec2d[i][j]);
+        int innerSize = vec2d[i].size();
+        int paddedSize = nextMultipleOf32(innerSize);
+        for (int j = 0; j < paddedSize; ++j) {
+            if (j < innerSize) {
+                vec1d.push_back(vec2d[i][j]);
+            } else {
+                vec1d.push_back(0); // Padding with zeros
+            }
             ++index;
         }
     }
