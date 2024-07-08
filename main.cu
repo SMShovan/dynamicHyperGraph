@@ -131,6 +131,46 @@ __global__ void colorNodes(RBTreeNode* nodes, int n) {
 }
 
 
+// Kernel to print each node from the device
+__global__ void printEachNode(RBTreeNode* nodes, int n) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < n) {
+        RBTreeNode* current = nodes;
+        while (current != nullptr && current->index != tid) {
+            if (current->index > tid) {
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        if (current != nullptr) {
+            printf("Node %d: Index = %d, Value = %d, Color = %s\n",
+                   tid, current->index, current->value, current->color ? "Black" : "Red");
+        }
+    }
+}
+// Kernel to find and print nodes in the tree
+__global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < searchSize) {
+        int searchIndex = searchIndices[tid];
+        RBTreeNode* current = nodes;
+        while (current != nullptr && current->index != searchIndex) {
+            if (current->index > searchIndex) {
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        if (current != nullptr) {
+            printf("Node %d: Index = %d, Value = %d, Color = %s\n",
+                   searchIndex, current->index, current->value, current->color ? "Black" : "Red");
+        } else {
+            printf("Node %d: Not Found\n", searchIndex);
+        }
+    }
+}
+
 void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize) {
     RBTreeNode* d_nodes;
     int* d_indices;
@@ -161,25 +201,33 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     colorNodes<<<numBlocks, blockSize>>>(d_nodes, n);
     checkCuda(cudaDeviceSynchronize());
 
-    // Transfer the tree back to the host
-    RBTreeNode* h_nodes = new RBTreeNode[n];
-    checkCuda(cudaMemcpy(h_nodes, d_nodes, n * sizeof(RBTreeNode), cudaMemcpyDeviceToHost));
+    // Print each node from the device
+    std::cout << "Printing the tree from the device:" << std::endl;
+    printEachNode<<<numBlocks, blockSize>>>(d_nodes, n);
+    checkCuda(cudaDeviceSynchronize());
 
-    std::cout << "Nodes after synchronization:" << std::endl;
-    for (int i = 0; i < n; ++i) {
-        std::cout << "Node " << i << ": Index = " << h_nodes[i].index
-                  << ", Value = " << h_nodes[i].value
-                  << ", Color = " << (h_nodes[i].color ? "Black" : "Red") << std::endl;
-    }
+
+    std::vector<int> searchVector = {0, 3, 6, 9};
+    int* d_searchVector;
+    checkCuda(cudaMalloc(&d_searchVector, searchVector.size() * sizeof(int)));
+    checkCuda(cudaMemcpy(d_searchVector, searchVector.data(), searchVector.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Search for the nodes in parallel
+    std::cout << "Searching for nodes in the tree:" << std::endl;
+    findNode<<<(searchVector.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_searchVector, searchVector.size());
+    checkCuda(cudaDeviceSynchronize());
 
     // Free device memory
+    checkCuda(cudaFree(d_searchVector));
     checkCuda(cudaFree(d_indices));
     checkCuda(cudaFree(d_values));
     checkCuda(cudaFree(d_nodes));
     checkCuda(cudaFree(d_flatValues));
 
-    delete[] h_nodes;
+    
 }
+
+
 
 
 int main() {
