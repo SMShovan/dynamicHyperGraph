@@ -134,7 +134,7 @@ __global__ void colorNodes(RBTreeNode* nodes, int n) {
 // Kernel to print each node from the device
 __global__ void printEachNode(RBTreeNode* nodes, int n) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < n) {
+    if (tid <= n) {
         RBTreeNode* current = nodes;
         while (current != nullptr && current->index != tid) {
             if (current->index > tid) {
