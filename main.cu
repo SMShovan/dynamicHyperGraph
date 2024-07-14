@@ -226,6 +226,14 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
 }
 
 void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize) {
+    const int fixedSize = 1024; // Fixed size for d_flatValues
+
+    // Check if fixedSize is at least flatValuesSize
+    if (fixedSize < flatValuesSize) {
+        std::cerr << "Overflow: fixedSize is less than flatValuesSize" << std::endl;
+        return;
+    }
+
     RBTreeNode* d_nodes;
     int* d_indices;
     int* d_values;
@@ -233,16 +241,26 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_insertIndices;
     int* d_insertValues;
 
+    // Allocate device memory
     checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
     checkCuda(cudaMalloc(&d_indices, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_values, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_flatValues, flatValuesSize * sizeof(int)));
+
+    // Allocate fixed memory for d_flatValues
+    checkCuda(cudaMalloc(&d_flatValues, fixedSize * sizeof(int)));
+
+    // Copy first portion from flatValues
+    checkCuda(cudaMemcpy(d_flatValues, flatValues, flatValuesSize * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Initialize remaining portion to zero
+    checkCuda(cudaMemset(d_flatValues + flatValuesSize, 0, (fixedSize - flatValuesSize) * sizeof(int)));
+
     checkCuda(cudaMalloc(&d_insertIndices, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_insertValues, n * sizeof(int)));
 
     checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_flatValues, flatValues, flatValuesSize * sizeof(int), cudaMemcpyHostToDevice));
+
     // Copy dummy insert indices and values for initial tree construction
     checkCuda(cudaMemcpy(d_insertIndices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_insertValues, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
@@ -283,10 +301,11 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, insertIndices.size());
     checkCuda(cudaDeviceSynchronize());
 
-    checkCuda(cudaMemcpy(flatValues, d_flatValues, flatValuesSize * sizeof(int), cudaMemcpyDeviceToHost));
+    // Copy flat values back to host and print them
+    std::vector<int> updatedFlatValues(fixedSize);
+    checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
 
-    printVector(std::vector<int>(flatValues, flatValues + flatValuesSize), "Updated Flattened Values (vec1d)");
-
+    printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
 
     // Free device memory
     checkCuda(cudaFree(d_insertIndices));
@@ -320,7 +339,6 @@ int main() {
 
     constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size());
 
-    
 
     delete[] h_indices;
     return 0;
