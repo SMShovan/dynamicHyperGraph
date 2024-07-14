@@ -190,13 +190,20 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
     }
 }
 
-// Kernel to insert nodes in the tree
-__global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int insertSize) {
+__global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
         int insertIndex = insertIndices[tid];
-        int insertValue = insertValues[tid];
-
+        int* values;
+        int numValues; 
+        if (tid == 0){
+            values = insertValues;
+            numValues = insertSizes[tid];
+        }
+        else{
+            values = insertValues + insertSizes[tid - 1];
+            numValues = insertSizes[tid] - insertSizes[tid - 1];
+        }
         // Search for the node by index
         RBTreeNode* current = nodes;
         while (current != nullptr && current->index != insertIndex) {
@@ -212,12 +219,13 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
             int valueIndex = current->value;
             
             // Navigate flatValues array to find the position to insert
-            while (flatValues[valueIndex] != 0) {
-                valueIndex++;
+            for (int i = 0; i < numValues; ++i) {
+                while (flatValues[valueIndex] != 0) {
+                    valueIndex++;
+                }
+                // Insert the new value
+                flatValues[valueIndex] = values[i];
             }
-            
-            // Insert the new value
-            flatValues[valueIndex] = insertValue;
 
             // Update the node's value to the new index
             current->value = valueIndex;
@@ -240,6 +248,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_flatValues;
     int* d_insertIndices;
     int* d_insertValues;
+    int* d_insertSizes;
 
     // Allocate device memory
     checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
@@ -256,7 +265,8 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemset(d_flatValues + flatValuesSize, 0, (fixedSize - flatValuesSize) * sizeof(int)));
 
     checkCuda(cudaMalloc(&d_insertIndices, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_insertValues, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_insertValues, n * 3 * sizeof(int)));  // Allocate max size for values
+    checkCuda(cudaMalloc(&d_insertSizes, n * sizeof(int)));
 
     checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
@@ -286,19 +296,27 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaDeviceSynchronize());
 
     // Prepare data for insertion
-    std::vector<std::pair<int, int>> insertVector = {{2, 200}, {4, 400}, {6, 600}};
+    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200, 300}}, {4, {400}}, {6, {600, 700, 650}}};
     std::vector<int> insertIndices(insertVector.size());
-    std::vector<int> insertValues(insertVector.size());
+    std::vector<int> insertValues;
+    std::vector<int> insertSizes(insertVector.size());
+    
+    int count = 0;
     for (size_t i = 0; i < insertVector.size(); ++i) {
         insertIndices[i] = insertVector[i].first;
-        insertValues[i] = insertVector[i].second;
+        insertValues.insert(insertValues.end(), insertVector[i].second.begin(), insertVector[i].second.end());
+        if (i == 0)
+            insertSizes[i] = insertVector[i].second.size();
+        else 
+            insertSizes[i] = insertSizes[i-1] + insertVector[i].second.size();
     }
 
     checkCuda(cudaMemcpy(d_insertIndices, insertIndices.data(), insertIndices.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_insertValues, insertValues.data(), insertValues.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertSizes, insertSizes.data(), insertSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
 
     // Insert nodes into the Red-Black Tree
-    insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, insertIndices.size());
+    insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size());
     checkCuda(cudaDeviceSynchronize());
 
     // Copy flat values back to host and print them
@@ -310,6 +328,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     // Free device memory
     checkCuda(cudaFree(d_insertIndices));
     checkCuda(cudaFree(d_insertValues));
+    checkCuda(cudaFree(d_insertSizes));
     checkCuda(cudaFree(d_indices));
     checkCuda(cudaFree(d_values));
     checkCuda(cudaFree(d_nodes));
