@@ -23,7 +23,11 @@ std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2)
 }
 
 int nextMultipleOf32(int num) {
-    return ((num + 31) / 32) * 32;
+    return ((num + 32) / 32) * 32;
+}
+
+int nextMultipleOf4(int num) {
+    return ((num + 4) / 4) * 4;
 }
 
 std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
@@ -34,7 +38,7 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
     for (size_t i = 0; i < vec2d.size(); ++i) {
         vec2dto1d[i] = index;
         int innerSize = vec2d[i].size();
-        int paddedSize = nextMultipleOf32(innerSize);
+        int paddedSize = nextMultipleOf4(innerSize);
         for (int j = 0; j < paddedSize; ++j) {
             if (j < innerSize) {
                 vec1d.push_back(vec2d[i][j]);
@@ -92,6 +96,7 @@ struct RBTreeNode {
     int index;
     int value;
     int length;
+    int size;
     bool color; // Red or Black
     RBTreeNode* left;
     RBTreeNode* right;
@@ -128,7 +133,7 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
         //     printf("size is %d \n", n);
         // #endif
 
-
+        nodes[tid].size = totalSize;
         if (index2 < n) {
             nodes[tid].index = indices[index2];
             nodes[tid].value = values[index2];
@@ -163,8 +168,8 @@ __global__ void printEachNode(RBTreeNode* nodes, int n) {
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
-                   tid, current->index, current->value, current->length, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d, Color = %s\n",
+                   tid, current->index, current->value, current->length, current->size, current->color ? "Black" : "Red");
         }
     }
 }
@@ -220,11 +225,26 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
             
             // Navigate flatValues array to find the position to insert
             for (int i = 0; i < numValues; ++i) {
-                while (flatValues[valueIndex] != 0) {
+                bool isOverflow = false;
+                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN) {
+                    if (flatValues[valueIndex + 1] == INT_MIN)
+                    {
+                        # if __CUDA_ARCH__>=200
+                            printf("Overflow %d \n", valueIndex + 1);
+                        #endif
+                        isOverflow = true;
+                    }
+                    if (isOverflow)
+                    {
+                        break;
+                    }
                     valueIndex++;
                 }
                 // Insert the new value
-                flatValues[valueIndex] = values[i];
+                if (isOverflow)
+                    break;
+                if (flatValues[valueIndex] != INT_MIN)
+                    flatValues[valueIndex] = values[i];
             }
 
             // Update the node's value to the new index
@@ -296,7 +316,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaDeviceSynchronize());
 
     // Prepare data for insertion
-    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200, 300}}, {4, {400}}, {6, {600, 700, 650}}};
+    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200, 300, 310, 320, 330, 340, 350}}, {4, {400}}, {6, {600, 700, 650}}};
     std::vector<int> insertIndices(insertVector.size());
     std::vector<int> insertValues;
     std::vector<int> insertSizes(insertVector.size());
