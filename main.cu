@@ -195,7 +195,7 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
     }
 }
 
-__global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize) {
+__global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
         int insertIndex = insertIndices[tid];
@@ -230,7 +230,10 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
                     if (flatValues[valueIndex + 1] == INT_MIN)
                     {
                         # if __CUDA_ARCH__>=200
-                            printf("Overflow %d \n", valueIndex + 1);
+                            printf("Overflow of thread %d: position %d start %d of size %d \n", tid, valueIndex + 1, i, numValues - i);
+                            partialSolution[tid * 3] = valueIndex + 1;
+                            partialSolution[tid * 3 + 1] = i; 
+                            partialSolution[tid * 3 + 2] = numValues - i; 
                         #endif
                         isOverflow = true;
                     }
@@ -269,6 +272,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_insertIndices;
     int* d_insertValues;
     int* d_insertSizes;
+    int* d_partialSolution;
 
     // Allocate device memory
     checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
@@ -287,6 +291,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMalloc(&d_insertIndices, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_insertValues, n * 3 * sizeof(int)));  // Allocate max size for values
     checkCuda(cudaMalloc(&d_insertSizes, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_partialSolution, 3 * n * sizeof(int)));
 
     checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
@@ -316,10 +321,11 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaDeviceSynchronize());
 
     // Prepare data for insertion
-    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200, 300, 310, 320, 330, 340, 350}}, {4, {400}}, {6, {600, 700, 650}}};
+    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
     std::vector<int> insertIndices(insertVector.size());
     std::vector<int> insertValues;
     std::vector<int> insertSizes(insertVector.size());
+    std::vector<int> partialSolution(insertVector.size() * 3, 0);
     
     int count = 0;
     for (size_t i = 0; i < insertVector.size(); ++i) {
@@ -334,15 +340,18 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(d_insertIndices, insertIndices.data(), insertIndices.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_insertValues, insertValues.data(), insertValues.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_insertSizes, insertSizes.data(), insertSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_partialSolution, partialSolution.data(), insertSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
 
     // Insert nodes into the Red-Black Tree
-    insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size());
+    insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size(), d_partialSolution);
     checkCuda(cudaDeviceSynchronize());
 
     // Copy flat values back to host and print them
     std::vector<int> updatedFlatValues(fixedSize);
     checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
 
+    checkCuda(cudaMemcpy(partialSolution.data(), d_partialSolution, insertSizes.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
+    printVector(partialSolution, "Partial solution");
     printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
 
     // Free device memory
