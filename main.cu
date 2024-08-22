@@ -27,6 +27,8 @@ int nextMultipleOf32(int num) {
 }
 
 int nextMultipleOf4(int num) {
+    if (num == 0)
+        return 0;
     return ((num + 4) / 4) * 4;
 }
 
@@ -256,6 +258,76 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
     }
 }
 
+__global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize){
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < insertSize) {
+        int insertIndex = insertIndices[tid];
+        int* values;
+        int numValues; 
+        if (tid == 0){
+            values = insertValues;
+            numValues = insertSizes[tid];
+        }
+        else{
+            values = insertValues + insertSizes[tid - 1];
+            numValues = insertSizes[tid] - insertSizes[tid - 1];
+        }
+
+        int idxPartialSolution = tid * 3;
+        int startPartialSolution = idxPartialSolution + 1;
+        int lenPartialSolution = idxPartialSolution + 2;
+
+        if (tid == 0)
+            if (partialSolution[lenPartialSolution] == 0)
+                return;
+        else
+            if (partialSolution[lenPartialSolution] == partialSolution[lenPartialSolution - 3] )
+                return;
+        
+        int startIdx, endIdx;
+        int storeStartIdx;
+        if (tid == 0)
+        {
+            startIdx = spaceAvailableFrom;
+
+        }
+        else 
+        {
+            startIdx = spaceAvailableFrom + partialSolution[idxPartialSolution - 1];
+        }
+
+        storeStartIdx = startIdx;
+
+        for (int i = partialSolution[startPartialSolution]; i < numValues; i++, startIdx++)
+        {
+            flatValues[startIdx] = values[i];
+        }
+
+        flatValues[storeStartIdx + partialSolution[lenPartialSolution] ] = INT_MIN;
+
+        
+
+        // # if __CUDA_ARCH__>=200
+        //     printf("infinity set: %d with len %d \n", storeStartIdx + partialSolution[lenPartialSolution], partialSolution[lenPartialSolution] );
+            
+        // #endif
+
+    }
+}
+
+void cumPartialSol(std::vector<int>& partialSolution){
+    
+    int cum = 0;
+    for (int i = 0; i < partialSolution.size(); i++)
+    {
+        if ((i + 1) % 3 == 0)
+        {
+            partialSolution[i] = nextMultipleOf4(partialSolution[i]) + cum;
+            cum = partialSolution[i];
+        }
+    }
+}
+
 void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize) {
     const int fixedSize = 1024; // Fixed size for d_flatValues
 
@@ -346,12 +418,24 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size(), d_partialSolution);
     checkCuda(cudaDeviceSynchronize());
 
-    // Copy flat values back to host and print them
-    std::vector<int> updatedFlatValues(fixedSize);
-    checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
+    
 
     checkCuda(cudaMemcpy(partialSolution.data(), d_partialSolution, insertSizes.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
     printVector(partialSolution, "Partial solution");
+    
+
+    cumPartialSol(partialSolution);
+    checkCuda(cudaMemcpy(d_partialSolution, partialSolution.data(), insertSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+
+    printVector(partialSolution, "Cumulative Partial solution");
+
+    printf("Space available from: %d \n", flatValuesSize);
+
+    allocateSpace<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_flatValues, flatValuesSize, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size());
+
+    // Copy flat values back to host and print them
+    std::vector<int> updatedFlatValues(fixedSize);
+    checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
 
     // Free device memory
