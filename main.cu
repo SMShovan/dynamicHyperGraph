@@ -7,6 +7,89 @@
 #include <climits>
 #include <algorithm>
 
+// Predefined id_to_index array
+__device__ int id_to_index[128] = {
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	21, 23, 22, 24, 23, 25, 24, 26,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	21, 22, 23, 24, 23, 24, 25, 26,
+	21, 23, 23, 25, 22, 24, 24, 26,
+	27, 28, 28, 29, 28, 29, 29, 30,
+	1, 2, 2, 3, 2, 3, 3, 4,
+	5, 6, 6, 8, 7, 9, 9, 10,
+	5, 7, 6, 9, 6, 9, 8, 10,
+	11, 13, 12, 14, 13, 15, 14, 16,
+	5, 6, 7, 9, 6, 8, 9, 10,
+	11, 12, 13, 14, 13, 14, 15, 16,
+	11, 13, 13, 15, 12, 14, 14, 16,
+	17, 18, 18, 19, 18, 19, 19, 20
+};
+
+// CUDA Kernel
+__global__ void get_motif_index_kernel(int* deg_a, int* deg_b, int* deg_c, int* C_ab, int* C_bc, int* C_ca, int* g_abc, int* results, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < n) {
+        int a = deg_a[idx] - (C_ab[idx] + C_ca[idx]) + g_abc[idx];
+        int b = deg_b[idx] - (C_bc[idx] + C_ab[idx]) + g_abc[idx];
+        int c = deg_c[idx] - (C_ca[idx] + C_bc[idx]) + g_abc[idx];
+        int d = C_ab[idx] - g_abc[idx];
+        int e = C_bc[idx] - g_abc[idx];
+        int f = C_ca[idx] - g_abc[idx];
+        int g = g_abc[idx];
+
+        int motif_id = (a > 0) + ((b > 0) << 1) + ((c > 0) << 2) + ((d > 0) << 3) + ((e > 0) << 4) + ((f > 0) << 5) + ((g > 0) << 6);
+        results[idx] = id_to_index[motif_id] - 1;
+    }
+}
+
+// Host function to call CUDA kernel
+void get_motif_index_parallel(int* deg_a, int* deg_b, int* deg_c, int* C_ab, int* C_bc, int* C_ca, int* g_abc, int* results, int n) {
+    // Device pointers
+    int *d_deg_a, *d_deg_b, *d_deg_c, *d_C_ab, *d_C_bc, *d_C_ca, *d_g_abc, *d_results;
+
+    // Allocate device memory
+    cudaMalloc((void**)&d_deg_a, n * sizeof(int));
+    cudaMalloc((void**)&d_deg_b, n * sizeof(int));
+    cudaMalloc((void**)&d_deg_c, n * sizeof(int));
+    cudaMalloc((void**)&d_C_ab, n * sizeof(int));
+    cudaMalloc((void**)&d_C_bc, n * sizeof(int));
+    cudaMalloc((void**)&d_C_ca, n * sizeof(int));
+    cudaMalloc((void**)&d_g_abc, n * sizeof(int));
+    cudaMalloc((void**)&d_results, n * sizeof(int));
+
+    // Copy data from host to device
+    cudaMemcpy(d_deg_a, deg_a, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_deg_b, deg_b, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_deg_c, deg_c, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_C_ab, C_ab, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_C_bc, C_bc, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_C_ca, C_ca, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_g_abc, g_abc, n * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Define number of threads and blocks
+    int blockSize = 256;
+    int numBlocks = (n + blockSize - 1) / blockSize;
+
+    // Launch CUDA kernel
+    get_motif_index_kernel<<<numBlocks, blockSize>>>(d_deg_a, d_deg_b, d_deg_c, d_C_ab, d_C_bc, d_C_ca, d_g_abc, d_results, n);
+
+    // Copy results from device to host
+    cudaMemcpy(results, d_results, n * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(d_deg_a);
+    cudaFree(d_deg_b);
+    cudaFree(d_deg_c);
+    cudaFree(d_C_ab);
+    cudaFree(d_C_bc);
+    cudaFree(d_C_ca);
+    cudaFree(d_g_abc);
+    cudaFree(d_results);
+}
+
 //Function to create a random 2-D vector
 std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
     std::vector<std::vector<int>> vec2d(n);
