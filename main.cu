@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <climits>
+#include <algorithm>
 
 //Function to create a random 2-D vector
 std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
@@ -20,6 +21,28 @@ std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2)
     }
 
     return vec2d;
+}
+
+std::vector<std::vector<int>> alternate(const std::vector<std::vector<int>>& random2DVec) {
+    // Step 1: Find the maximum value in random2DVec
+    int maxValue = 0;
+    for (const auto& row : random2DVec) {
+        if (!row.empty()) {
+            maxValue = std::max(maxValue, *std::max_element(row.begin(), row.end()));
+        }
+    }
+
+    // Step 2: Initialize alter2DVec with size maxValue + 1 (to handle 0-indexing)
+    std::vector<std::vector<int>> alter2DVec(maxValue + 1);
+
+    // Step 3: Populate alter2DVec with indices from random2DVec
+    for (int rowIndex = 0; rowIndex < random2DVec.size(); ++rowIndex) {
+        for (int value : random2DVec[rowIndex]) {
+            alter2DVec[value].push_back(rowIndex);  // Insert the row index at the position of the value
+        }
+    }
+
+    return alter2DVec;
 }
 
 int nextMultipleOf32(int num) {
@@ -451,8 +474,11 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
 int main() {
     int n = 8;
     std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
-
+    std::vector<std::vector<int>> alter2DVec = alternate(random2DVec);
     print2DVector(random2DVec);
+    std::cout<< "Alternate"<< std::endl;
+    //print2DVector(alter2DVec);
+
 
     // Flatten the 2D vector
     auto flattened = flatten2DVector(random2DVec);
