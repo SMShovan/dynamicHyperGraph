@@ -341,7 +341,14 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
             // Navigate flatValues array to find the position to insert
             for (int i = 0; i < numValues; ++i) {
                 bool isOverflow = false;
-                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN) {
+                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN /*&& flatValues[valueIndex] > 0*/) {
+                    
+                    // Needs to be tested
+                    /* if (flatValues[valueIndex] < 0)
+                    {
+                        valueIndex = flatValues[valueIndex] * (-1);
+                        continue;
+                    }*/
                     if (flatValues[valueIndex + 1] == INT_MIN)
                     {
                         # if __CUDA_ARCH__>=200
@@ -418,7 +425,7 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
 
         flatValues[storeStartIdx + partialSolution[lenPartialSolution] ] = INT_MIN;
 
-        flatValues[idxPartialSolution] = storeStartIdx * (-1);
+        flatValues[partialSolution[idxPartialSolution]] = storeStartIdx * (-1);
 
         // # if __CUDA_ARCH__>=200
         //     printf("infinity set: %d with len %d \n", storeStartIdx + partialSolution[lenPartialSolution], partialSolution[lenPartialSolution] );
