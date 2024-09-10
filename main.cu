@@ -128,7 +128,7 @@ std::vector<std::vector<int>> alternate(const std::vector<std::vector<int>>& ran
     // Step 3: Populate alter2DVec with indices from random2DVec
     for (int rowIndex = 0; rowIndex < random2DVec.size(); ++rowIndex) {
         for (int value : random2DVec[rowIndex]) {
-            alter2DVec[value].push_back(rowIndex);  // Insert the row index at the position of the value
+            alter2DVec[value].push_back(rowIndex + 1);  // Insert the row index at the position of the value
         }
     }
 
@@ -341,14 +341,14 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
             // Navigate flatValues array to find the position to insert
             for (int i = 0; i < numValues; ++i) {
                 bool isOverflow = false;
-                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN /*&& flatValues[valueIndex] > 0*/) {
+                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN && flatValues[valueIndex] > 0) {
                     
                     // Needs to be tested
-                    /* if (flatValues[valueIndex] < 0)
+                    if (flatValues[valueIndex] < 0)
                     {
                         valueIndex = flatValues[valueIndex] * (-1);
                         continue;
-                    }*/
+                    }
                     if (flatValues[valueIndex + 1] == INT_MIN)
                     {
                         # if __CUDA_ARCH__>=200
@@ -574,17 +574,29 @@ int main() {
     std::vector<std::vector<int>> alter2DVec = alternate(random2DVec);
     print2DVector(random2DVec);
     std::cout<< "Alternate"<< std::endl;
-    //print2DVector(alter2DVec);
+    print2DVector(alter2DVec);
 
 
     // Flatten the 2D vector
     auto flattened = flatten2DVector(random2DVec);
+    auto flattened2 = flatten2DVector(alter2DVec);
+
     std::vector<int> flatValues = flattened.first;
     std::vector<int> flatIndices = flattened.second;
+
+    std::vector<int> flatValues2 = flattened2.first;
+    std::vector<int> flatIndices2 = flattened2.second;
+
+
 
     // Print the flattened vectors
     printVector(flatValues, "Flattened Values (vec1d)");
     printVector(flatIndices, "Flattened Indices (vec2dto1d)");
+
+    printVector(flatValues2, "Flattened Values2 (vec1d)");
+    printVector(flatIndices2, "Flattened Indices2 (vec2dto1d)");
+
+
 
     int* h_values = flatIndices.data();
     int* h_indices = new int[flatIndices.size()];
