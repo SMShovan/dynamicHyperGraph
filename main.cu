@@ -418,7 +418,7 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
 
         flatValues[storeStartIdx + partialSolution[lenPartialSolution] ] = INT_MIN;
 
-        
+        flatValues[idxPartialSolution] = storeStartIdx * (-1);
 
         // # if __CUDA_ARCH__>=200
         //     printf("infinity set: %d with len %d \n", storeStartIdx + partialSolution[lenPartialSolution], partialSolution[lenPartialSolution] );
