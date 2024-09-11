@@ -448,8 +448,10 @@ void cumPartialSol(std::vector<int>& partialSolution){
     }
 }
 
-void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize) {
+void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2) {
     const int fixedSize = 1024; // Fixed size for d_flatValues
+
+//hyperedge2node
 
     // Check if fixedSize is at least flatValuesSize
     if (fixedSize < flatValuesSize) {
@@ -519,7 +521,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     std::vector<int> insertSizes(insertVector.size());
     std::vector<int> partialSolution(insertVector.size() * 3, 0);
     
-    int count = 0;
+
     for (size_t i = 0; i < insertVector.size(); ++i) {
         insertIndices[i] = insertVector[i].first;
         insertValues.insert(insertValues.end(), insertVector[i].second.begin(), insertVector[i].second.end());
@@ -558,7 +560,119 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
 
-    // Free device memory
+
+
+//node2hyperedge
+    // Check if fixedSize is at least flatValuesSize
+    if (fixedSize < flatValuesSize2) {
+        std::cerr << "Overflow: fixedSize is less than flatValuesSize2" << std::endl;
+        return;
+    }
+
+    RBTreeNode* d_nodes2;
+    int* d_indices2;
+    int* d_values2;
+    int* d_flatValues2;
+    int* d_insertIndices2;
+    int* d_insertValues2;
+    int* d_insertSizes2;
+    int* d_partialSolution2;
+
+    // Allocate device memory
+    checkCuda(cudaMalloc(&d_nodes2, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_indices2, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_values2, n * sizeof(int)));
+
+    // Allocate fixed memory for d_flatValues
+    checkCuda(cudaMalloc(&d_flatValues2, fixedSize * sizeof(int)));
+
+    // Copy first portion from flatValues
+    checkCuda(cudaMemcpy(d_flatValues2, flatValues2, flatValuesSize2 * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Initialize remaining portion to zero
+    checkCuda(cudaMemset(d_flatValues2 + flatValuesSize2, 0, (fixedSize - flatValuesSize2) * sizeof(int)));
+
+    checkCuda(cudaMalloc(&d_insertIndices2, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_insertValues2, n * 3 * sizeof(int)));  // Allocate max size for values
+    checkCuda(cudaMalloc(&d_insertSizes2, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_partialSolution2, 3 * n * sizeof(int)));
+
+    checkCuda(cudaMemcpy(d_indices2, h_indices2, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_values2, h_values2, n * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Copy dummy insert indices and values for initial tree construction
+    checkCuda(cudaMemcpy(d_insertIndices2, h_indices2, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertValues2, h_values2, n * sizeof(int), cudaMemcpyHostToDevice));
+
+    blockSize = 256;
+    numBlocks = (n + blockSize - 1) / blockSize;
+
+    // Step 1: Build the empty binary tree
+    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes2, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Step 2: Store items into internal nodes
+    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes2, d_indices2, d_values2, n, flatValuesSize2);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Step 3: Color the nodes
+    colorNodes<<<numBlocks, blockSize>>>(d_nodes2, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Print each node from the device
+    std::cout << "Printing the tree from the device:" << std::endl;
+    printEachNode<<<numBlocks, blockSize>>>(d_nodes2, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Prepare data for insertion
+    std::vector<std::pair<int, std::vector<int>>> insertVector2 = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
+    std::vector<int> insertIndices2(insertVector2.size());
+    std::vector<int> insertValues2;
+    std::vector<int> insertSizes2(insertVector2.size());
+    std::vector<int> partialSolution2(insertVector2.size() * 3, 0);
+    
+
+    for (size_t i = 0; i < insertVector2.size(); ++i) {
+        insertIndices2[i] = insertVector2[i].first;
+        insertValues2.insert(insertValues2.end(), insertVector2[i].second.begin(), insertVector2[i].second.end());
+        if (i == 0)
+            insertSizes2[i] = insertVector2[i].second.size();
+        else 
+            insertSizes2[i] = insertSizes2[i-1] + insertVector2[i].second.size();
+    }
+
+    checkCuda(cudaMemcpy(d_insertIndices2, insertIndices2.data(), insertIndices2.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertValues2, insertValues2.data(), insertValues2.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertSizes2, insertSizes2.data(), insertSizes2.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_partialSolution2, partialSolution2.data(), insertSizes2.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+
+    // Insert nodes into the Red-Black Tree
+    insertNode<<<(insertIndices2.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes2, d_flatValues2, d_insertIndices2, d_insertValues2, d_insertSizes2, insertIndices2.size(), d_partialSolution2);
+    checkCuda(cudaDeviceSynchronize());
+
+    
+
+    checkCuda(cudaMemcpy(partialSolution2.data(), d_partialSolution2, insertSizes2.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
+    printVector(partialSolution2, "Partial solution");
+    
+
+    cumPartialSol(partialSolution2);
+    checkCuda(cudaMemcpy(d_partialSolution2, partialSolution2.data(), insertSizes2.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+
+    printVector(partialSolution2, "Cumulative Partial solution");
+
+    printf("Space available from: %d \n", flatValuesSize2);
+
+    allocateSpace<<<(insertIndices2.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_flatValues2, flatValuesSize2, d_insertIndices2, d_insertValues2, d_insertSizes2, insertIndices2.size());
+
+    // Copy flat values back to host and print them
+    std::vector<int> updatedFlatValues2(fixedSize);
+    checkCuda(cudaMemcpy(updatedFlatValues2.data(), d_flatValues2, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
+    printVector(updatedFlatValues2, "Updated Flattened Values (vec1d)");
+
+// 
+
+// Free device memory
     checkCuda(cudaFree(d_insertIndices));
     checkCuda(cudaFree(d_insertValues));
     checkCuda(cudaFree(d_insertSizes));
@@ -566,6 +680,14 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaFree(d_values));
     checkCuda(cudaFree(d_nodes));
     checkCuda(cudaFree(d_flatValues));
+
+    checkCuda(cudaFree(d_insertIndices2));
+    checkCuda(cudaFree(d_insertValues2));
+    checkCuda(cudaFree(d_insertSizes2));
+    checkCuda(cudaFree(d_indices2));
+    checkCuda(cudaFree(d_values2));
+    checkCuda(cudaFree(d_nodes2));
+    checkCuda(cudaFree(d_flatValues2));
 }
 
 int main() {
@@ -604,9 +726,18 @@ int main() {
         h_indices[i] = i + 1;
     }
 
-    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size());
+    int* h_values2 = flatIndices2.data();
+    int* h_indices2 = new int[flatIndices2.size()];
+    for (size_t i = 0; i < flatIndices2.size(); ++i) {
+        h_indices2[i] = i + 1;
+    }
+
+    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size());
+
+    //constructRedBlackTree(h_indices2, h_values2, n, flatValues2.data(), flatValues2.size());
 
 
     delete[] h_indices;
+    delete[] h_indices2;
     return 0;
 }
