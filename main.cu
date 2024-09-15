@@ -6,6 +6,7 @@
 #include <ctime>
 #include <climits>
 #include <algorithm>
+#include <set>
 
 __device__ int id_to_index[128] = {
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -27,75 +28,28 @@ __device__ int id_to_index[128] = {
 };
 
 // CUDA Kernel to compute motif index and count occurrences
-__global__ void count_motif_kernel(int* deg_a, int* deg_b, int* deg_c, int* C_ab, int* C_bc, int* C_ca, int* g_abc, int* motif_counts, int n) {
-    int tid = threadIdx.x;  // Each thread handles one motif_id (0 to 29)
+__device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc, int C_ca, int g_abc, int* motif_counts, int n, int idx) {
+
 
     int count = 0;
-    for (int i = 0; i < n; i++) {
-        int a = deg_a[i] - (C_ab[i] + C_ca[i]) + g_abc[i];
-        int b = deg_b[i] - (C_bc[i] + C_ab[i]) + g_abc[i];
-        int c = deg_c[i] - (C_ca[i] + C_bc[i]) + g_abc[i];
-        int d = C_ab[i] - g_abc[i];
-        int e = C_bc[i] - g_abc[i];
-        int f = C_ca[i] - g_abc[i];
-        int g = g_abc[i];
 
-        int motif_id = (a > 0) + ((b > 0) << 1) + ((c > 0) << 2) + ((d > 0) << 3) + ((e > 0) << 4) + ((f > 0) << 5) + ((g > 0) << 6);
-        int index = id_to_index[motif_id] - 1;
+    int a = deg_a - (C_ab + C_ca) + g_abc;
+    int b = deg_b - (C_bc + C_ab) + g_abc;
+    int c = deg_c - (C_ca + C_bc) + g_abc;
+    int d = C_ab - g_abc;
+    int e = C_bc - g_abc;
+    int f = C_ca - g_abc;
+    int g = g_abc;
 
-        // Increment the count if the motif_id matches the thread's id
-        if (index == tid) {
-            count++;
-        }
-    }
+    int motif_id = (a > 0) + ((b > 0) << 1) + ((c > 0) << 2) + ((d > 0) << 3) + ((e > 0) << 4) + ((f > 0) << 5) + ((g > 0) << 6);
+    int index = id_to_index[motif_id] - 1;
+
 
     // Store the count in the result array at index tid
-    motif_counts[tid] = count;
+    motif_counts[idx + index]++;
 }
 
-// Host function to call the CUDA kernel
-void count_motif_parallel(int* deg_a, int* deg_b, int* deg_c, int* C_ab, int* C_bc, int* C_ca, int* g_abc, int* motif_counts, int n) {
-    // Device pointers
-    int *d_deg_a, *d_deg_b, *d_deg_c, *d_C_ab, *d_C_bc, *d_C_ca, *d_g_abc, *d_motif_counts;
 
-    // Allocate device memory
-    cudaMalloc((void**)&d_deg_a, n * sizeof(int));
-    cudaMalloc((void**)&d_deg_b, n * sizeof(int));
-    cudaMalloc((void**)&d_deg_c, n * sizeof(int));
-    cudaMalloc((void**)&d_C_ab, n * sizeof(int));
-    cudaMalloc((void**)&d_C_bc, n * sizeof(int));
-    cudaMalloc((void**)&d_C_ca, n * sizeof(int));
-    cudaMalloc((void**)&d_g_abc, n * sizeof(int));
-    cudaMalloc((void**)&d_motif_counts, 30 * sizeof(int));  // 30 for values 0 to 29
-
-    // Copy data from host to device
-    cudaMemcpy(d_deg_a, deg_a, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_deg_b, deg_b, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_deg_c, deg_c, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C_ab, C_ab, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C_bc, C_bc, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C_ca, C_ca, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_g_abc, g_abc, n * sizeof(int), cudaMemcpyHostToDevice);
-
-    // Initialize the motif_counts array on the device to 0
-    cudaMemset(d_motif_counts, 0, 30 * sizeof(int));
-
-    // Launch the CUDA kernel with exactly 30 threads (one thread for each motif id 0 to 29)
-    count_motif_kernel<<<1, 30>>>(d_deg_a, d_deg_b, d_deg_c, d_C_ab, d_C_bc, d_C_ca, d_g_abc, d_motif_counts, n);
-
-    // Copy the motif_counts back to the host
-    cudaMemcpy(motif_counts, d_motif_counts, 30 * sizeof(int), cudaMemcpyDeviceToHost);
-
-    // Free device memory
-    cudaFree(d_deg_a);
-    cudaFree(d_deg_b);
-    cudaFree(d_deg_c);
-    cudaFree(d_C_ab);
-    cudaFree(d_C_bc);
-    cudaFree(d_C_ca);
-    cudaFree(d_g_abc);
-    cudaFree(d_motif_counts);
-}
 
 //Function to create a random 2-D vector
 std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
@@ -133,6 +87,38 @@ std::vector<std::vector<int>> alternate(const std::vector<std::vector<int>>& ran
     }
 
     return alter2DVec;
+}
+
+std::vector<std::vector<int>> hyperedgeAdjacency(
+    const std::vector<std::vector<int>>& vertexToHyperedge, 
+    const std::vector<std::vector<int>>& hyperedgeToVertex) {
+    
+    int nHyperedges = hyperedgeToVertex.size();
+    
+    // Resultant adjacency matrix for hyperedges
+    std::vector<std::vector<int>> hyperedgeAdjacencyMatrix(nHyperedges);
+
+    // Iterate through each hyperedge
+    for (int hyperedge = 0; hyperedge < nHyperedges; ++hyperedge) {
+        std::set<int> adjacentHyperedges;
+
+        // Get the vertices connected by this hyperedge
+        const std::vector<int>& vertices = hyperedgeToVertex[hyperedge];
+
+        // For each vertex, find other hyperedges connected to it
+        for (int vertex : vertices) {
+            for (int otherHyperedge : vertexToHyperedge[vertex]) {
+                if (otherHyperedge != hyperedge + 1) {  // Avoid self-loop
+                    adjacentHyperedges.insert(otherHyperedge); // Ensure no duplicates
+                }
+            }
+        }
+
+        // Convert set to vector and store in adjacency matrix
+        hyperedgeAdjacencyMatrix[hyperedge] = std::vector<int>(adjacentHyperedges.begin(), adjacentHyperedges.end());
+    }
+
+    return hyperedgeAdjacencyMatrix;
 }
 
 int nextMultipleOf32(int num) {
@@ -310,6 +296,36 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
     }
 }
 
+__global__ void findContents(RBTreeNode* nodes, int* searchIndices, int searchSize, int* flatValues) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < searchSize) {
+        int searchIndex = searchIndices[tid];
+        RBTreeNode* current = nodes;
+        while (current != nullptr && current->index != searchIndex) {
+            if (current->index > searchIndex) {
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        if (current != nullptr) {
+
+            int currLoc = current->value;
+            printf("\n");
+            while(flatValues[currLoc++] != INT_MIN)
+            {
+                printf("%d ", flatValues[currLoc]);
+            }
+            printf("\n");
+
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n", searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+        } else {
+            
+            printf("Node %d: Not Found\n", searchIndex);
+        }
+    }
+}
+
 __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
@@ -448,7 +464,194 @@ void cumPartialSol(std::vector<int>& partialSolution){
     }
 }
 
-void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2) {
+__device__ int deg(int* d_h2vFlatvalues, int loc) {
+    int count = 0;
+
+    while (d_h2vFlatvalues[loc] != 0 && d_h2vFlatvalues[loc] != INT_MIN )
+    {
+        count++;
+        loc++;
+    }
+
+    return count;
+}
+
+__device__ int con(int* d_h2vFlatvalues, int loc_a, int loc_b) {
+    int count = 0;
+    int i = loc_a;
+    int j = loc_b;
+    while (true) {
+        // Terminate if any element is INT_MIN or 0
+        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0) {
+            break;
+        }
+        
+        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j]) {
+            count++;  // Common item found
+            i++;
+            j++;
+        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j]) {
+            i++;  // Move pointer in arr1
+        } else {
+            j++;  // Move pointer in arr2
+        }
+
+        
+    }
+
+    return count;
+}
+
+__device__ int group(int* d_h2vFlatvalues, int loc_a, int loc_b, int loc_c) {
+    
+    int i = loc_a, j = loc_b, k = loc_c;
+    int count = 0;
+
+    // Use a single loop with three pointers
+    while (true) {
+        // Terminate if any element is INT_MIN or 0 in any of the three arrays
+        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[k] == INT_MIN || 
+            d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0 || d_h2vFlatvalues[k] == 0) {
+            break;
+        }
+
+        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j] && d_h2vFlatvalues[j] == d_h2vFlatvalues[k]) {
+            count++;  // Common item found in all three arrays
+            i++;
+            j++;
+            k++;
+        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j] || d_h2vFlatvalues[i] < d_h2vFlatvalues[k]) {
+            i++;  // Move pointer in arr1
+        } else if (d_h2vFlatvalues[j] < d_h2vFlatvalues[i] || d_h2vFlatvalues[j] < d_h2vFlatvalues[k]) {
+            j++;  // Move pointer in arr2
+        } else {
+            k++;  // Move pointer in arr3
+        }
+
+        
+    }
+
+    return count;
+}
+
+__global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues, 
+                            RBTreeNode * d_v2hNodes, int* d_v2hFlatvalues, 
+                            RBTreeNode * d_h2hNodes, int* d_h2hFlatvalues, int size, int * d_partialResults, int fixedSize) {
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < size) {
+// Partial result startPointer
+        int* startPointer = d_partialResults + idx * 30;
+// Find the address of the starting node of the hyperedge idx
+        int searchIndex = idx;
+        RBTreeNode* id_a = d_h2vNodes;
+        while (id_a != nullptr && id_a->index != searchIndex) {
+            if (id_a->index > searchIndex) {
+                id_a = id_a->left;
+            } else {
+                id_a = id_a->right;
+            }
+        }
+        if (id_a != nullptr) {
+            // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
+            //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+
+            int loc_a = id_a->value;
+            
+
+// Now search por adjacent hyperedge of a
+            searchIndex = idx;
+            RBTreeNode* id_b = d_h2vNodes;
+            while (id_b != nullptr && id_b->index != searchIndex) {
+                if (id_b->index > searchIndex) {
+                    id_b = id_b->left;
+                } else {
+                    id_b = id_b->right;
+                }
+            }
+            if (id_b != nullptr) {
+                // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
+                //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+
+                int loc_b = id_b->value;
+                
+                int temp_loc_a = loc_a;
+                int temp_loc_b = loc_b;
+
+                while (true) {
+                // Terminate if any element is INT_MIN or 0
+                if (d_h2hFlatvalues[temp_loc_a] == INT_MIN || d_h2hFlatvalues[temp_loc_b] == INT_MIN || d_h2hFlatvalues[temp_loc_a] == 0 || d_h2hFlatvalues[temp_loc_b] == 0) {
+                    break;
+                }
+                
+                if (d_h2hFlatvalues[temp_loc_a] == d_h2hFlatvalues[temp_loc_b]) {
+// Now process triangles 
+                    searchIndex = d_h2hFlatvalues[temp_loc_a]; 
+
+                    RBTreeNode* id_c = d_h2vNodes;
+                    while (id_c != nullptr && id_c->index != searchIndex) {
+                        if (id_c->index > searchIndex) {
+                            id_c = id_c->left;
+                        } else {
+                            id_c = id_c->right;
+                        }
+                    }
+                    if (id_c != nullptr) {
+                        // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
+                        //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+
+                        int loc_c = id_c->value;
+
+// Now get deg_(a,b,c), con_{(a,b),(b,c),(c,a)}, con_{(a,b,c)}
+                        int deg_a = deg(d_h2vFlatvalues, loc_a);
+                        int deg_b = deg(d_h2vFlatvalues, loc_b);
+                        int deg_c = deg(d_h2vFlatvalues, loc_c);
+
+                        int con_ab = con(d_h2vFlatvalues, loc_a, loc_b);
+                        int con_bc = con(d_h2vFlatvalues, loc_b, loc_c);
+                        int con_ca = con(d_h2vFlatvalues, loc_c, loc_a);
+
+                        int g_abc = group(d_h2vFlatvalues, loc_a, loc_b, loc_c);
+
+                        count_motif(deg_a, deg_b, deg_c, con_ab, con_bc, con_ca, g_abc, d_partialResults, 1, idx);
+
+                    
+                    }
+                    else{
+                        return;
+                    }
+
+                    
+                    temp_loc_a++;
+                    temp_loc_b++;
+                } else if (d_h2hFlatvalues[temp_loc_a] < d_h2hFlatvalues[temp_loc_b]) {
+                    temp_loc_a++;  // Move pointer in arr1
+                } else {
+                    temp_loc_b++;  // Move pointer in arr2
+                }
+
+                // Ensure we don't go out of bounds
+                if (temp_loc_a >= fixedSize || temp_loc_b >= fixedSize) {
+                    break;
+                }
+            }
+
+
+            } else {
+                return;
+            }
+
+        } else {
+            return;
+        }
+
+        
+    }
+}
+
+
+void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2, int* h_indices3, int* h_values3, int* flatValues3, int flatValuesSize3) {
     const int fixedSize = 1024; // Fixed size for d_flatValues
 
 //hyperedge2node
@@ -554,7 +757,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     printf("Space available from: %d \n", flatValuesSize);
 
     allocateSpace<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_flatValues, flatValuesSize, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size());
-
+    checkCuda(cudaDeviceSynchronize());
     // Copy flat values back to host and print them
     std::vector<int> updatedFlatValues(fixedSize);
     checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
@@ -670,7 +873,159 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(updatedFlatValues2.data(), d_flatValues2, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlatValues2, "Updated Flattened Values (vec1d)");
 
-// 
+//  hyperedge to hyperedge
+    // Check if fixedSize is at least flatValuesSize
+    if (fixedSize < flatValuesSize3) {
+        std::cerr << "Overflow: fixedSize is less than flatValuesSize3" << std::endl;
+        return;
+    }
+
+    RBTreeNode* d_nodes3;
+    int* d_indices3;
+    int* d_values3;
+    int* d_flatValues3;
+    int* d_insertIndices3;
+    int* d_insertValues3;
+    int* d_insertSizes3;
+    int* d_partialSolution3;
+
+    // Allocate device memory
+    checkCuda(cudaMalloc(&d_nodes3, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_indices3, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_values3, n * sizeof(int)));
+
+    // Allocate fixed memory for d_flatValues
+    checkCuda(cudaMalloc(&d_flatValues3, fixedSize * sizeof(int)));
+
+    // Copy first portion from flatValues
+    checkCuda(cudaMemcpy(d_flatValues3, flatValues3, flatValuesSize3 * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Initialize remaining portion to zero
+    checkCuda(cudaMemset(d_flatValues3 + flatValuesSize3, 0, (fixedSize - flatValuesSize3) * sizeof(int)));
+
+    checkCuda(cudaMalloc(&d_insertIndices3, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_insertValues3, n * 3 * sizeof(int)));  // Allocate max size for values
+    checkCuda(cudaMalloc(&d_insertSizes3, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_partialSolution3, 3 * n * sizeof(int)));
+
+    checkCuda(cudaMemcpy(d_indices3, h_indices3, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_values3, h_values3, n * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Copy dummy insert indices and values for initial tree construction
+    checkCuda(cudaMemcpy(d_insertIndices3, h_indices3, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertValues3, h_values3, n * sizeof(int), cudaMemcpyHostToDevice));
+
+    blockSize = 256;
+    numBlocks = (n + blockSize - 1) / blockSize;
+
+    // Step 1: Build the empty binary tree
+    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes3, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Step 2: Store items into internal nodes
+    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes3, d_indices3, d_values3, n, flatValuesSize3);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Step 3: Color the nodes
+    colorNodes<<<numBlocks, blockSize>>>(d_nodes3, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Print each node from the device
+    std::cout << "Printing the tree from the device:" << std::endl;
+    printEachNode<<<numBlocks, blockSize>>>(d_nodes3, n);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Prepare data for insertion
+    std::vector<std::pair<int, std::vector<int>>> insertVector3 = {{2, {200 }}};
+    std::vector<int> insertIndices3(insertVector3.size());
+    std::vector<int> insertValues3;
+    std::vector<int> insertSizes3(insertVector3.size());
+    std::vector<int> partialSolution3(insertVector3.size() * 3, 0);
+    
+
+    for (size_t i = 0; i < insertVector3.size(); ++i) {
+        insertIndices3[i] = insertVector3[i].first;
+        insertValues3.insert(insertValues3.end(), insertVector3[i].second.begin(), insertVector3[i].second.end());
+        if (i == 0)
+            insertSizes3[i] = insertVector3[i].second.size();
+        else 
+            insertSizes3[i] = insertSizes3[i-1] + insertVector3[i].second.size();
+    }
+
+    checkCuda(cudaMemcpy(d_insertIndices3, insertIndices3.data(), insertIndices3.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertValues3, insertValues3.data(), insertValues3.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertSizes3, insertSizes3.data(), insertSizes3.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_partialSolution3, partialSolution3.data(), insertSizes3.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+
+    // Insert nodes into the Red-Black Tree
+    insertNode<<<(insertIndices3.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes3, d_flatValues3, d_insertIndices3, d_insertValues3, d_insertSizes3, insertIndices3.size(), d_partialSolution3);
+    checkCuda(cudaDeviceSynchronize());
+
+    
+
+    checkCuda(cudaMemcpy(partialSolution3.data(), d_partialSolution3, insertSizes3.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
+    printVector(partialSolution3, "Partial solution");
+    
+
+    cumPartialSol(partialSolution3);
+    checkCuda(cudaMemcpy(d_partialSolution3, partialSolution3.data(), insertSizes3.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+
+    printVector(partialSolution3, "Cumulative Partial solution");
+
+    printf("Space available from: %d \n", flatValuesSize3);
+
+    allocateSpace<<<(insertIndices3.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_flatValues3, flatValuesSize3, d_insertIndices3, d_insertValues3, d_insertSizes3, insertIndices3.size());
+
+    // Copy flat values back to host and print them
+    std::vector<int> updatedFlatValues3(fixedSize);
+    checkCuda(cudaMemcpy(updatedFlatValues3.data(), d_flatValues3, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
+    printVector(updatedFlatValues3, "Updated Flattened Values (vec1d)");
+
+
+
+// Now algorithm having d_flatValues, d_flatValues2, updatedFlatValues2, updatedFlatValues2
+    std::vector<int> search = {1,2,3};
+    int *d_search;
+    checkCuda(cudaMalloc(&d_search, search.size() * sizeof(int)));
+    checkCuda(cudaMemcpy(d_search, search.data(), search.size() * sizeof(int), cudaMemcpyHostToDevice ));
+    findContents<<<(search.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_search, search.size(), d_flatValues);
+    checkCuda(cudaDeviceSynchronize());
+    findContents<<<(search.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes2, d_search, search.size(), d_flatValues2);
+    checkCuda(cudaDeviceSynchronize());
+
+// Storage for partial result
+    int m = 30; // Number of columns
+    std::vector<std::vector<int>> partialResults(n, std::vector<int>(m));
+
+    // Fill partialResults with some values
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < m; ++j) {
+            partialResults[i][j] = i * m + j;
+        }
+    }
+
+    // Step 1: Flatten the 2D vector into a 1D array
+    std::vector<int> flatPartialResults(n * m);
+    for (int i = 0; i < n; ++i) {
+        std::copy(partialResults[i].begin(), partialResults[i].end(), flatPartialResults.begin() + i * m);
+    }
+
+    // Step 2: Allocate memory on the device
+    int* d_partialResults;
+    size_t size = n * m * sizeof(int);
+    cudaMalloc(&d_partialResults, size);
+
+    // Step 3: Copy the flattened data to the device
+    cudaMemcpy(d_partialResults, flatPartialResults.data(), size, cudaMemcpyHostToDevice);
+
+    
+
+    updateCount<<<(n + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_nodes2, d_flatValues2, d_nodes3, d_flatValues3, n, d_partialResults, fixedSize);
+
+    
+
+   
+
 
 // Free device memory
     checkCuda(cudaFree(d_insertIndices));
@@ -694,20 +1049,28 @@ int main() {
     int n = 8;
     std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
     std::vector<std::vector<int>> alter2DVec = alternate(random2DVec);
+    std::cout<< "Hyperedge to vertex"<< std::endl;
     print2DVector(random2DVec);
-    std::cout<< "Alternate"<< std::endl;
+    std::cout<< "Vertex to hyperedge"<< std::endl;
     print2DVector(alter2DVec);
+    std::vector<std::vector<int>> h2h = hyperedgeAdjacency(alter2DVec, random2DVec);
+    std::cout<< "Hyperedge to hyperedge"<< std::endl;
+    print2DVector(h2h);
 
 
     // Flatten the 2D vector
     auto flattened = flatten2DVector(random2DVec);
     auto flattened2 = flatten2DVector(alter2DVec);
+    auto flattened3 = flatten2DVector(h2h);
 
     std::vector<int> flatValues = flattened.first;
     std::vector<int> flatIndices = flattened.second;
 
     std::vector<int> flatValues2 = flattened2.first;
     std::vector<int> flatIndices2 = flattened2.second;
+
+    std::vector<int> flatValues3 = flattened3.first;
+    std::vector<int> flatIndices3 = flattened3.second;
 
 
 
@@ -717,6 +1080,9 @@ int main() {
 
     printVector(flatValues2, "Flattened Values2 (vec1d)");
     printVector(flatIndices2, "Flattened Indices2 (vec2dto1d)");
+
+    printVector(flatValues3, "Flattened Values3 (vec1d)");
+    printVector(flatIndices3, "Flattened Indices3 (vec2dto1d)");
 
 
 
@@ -732,12 +1098,20 @@ int main() {
         h_indices2[i] = i + 1;
     }
 
-    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size());
+    int* h_values3 = flatIndices3.data();
+    int* h_indices3 = new int[flatIndices3.size()];
+    for (size_t i = 0; i < flatIndices3.size(); ++i) {
+        h_indices3[i] = i + 1;
+    }
+
+
+    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size(),  h_indices3, h_values3, flatValues3.data(), flatValues3.size());
 
     //constructRedBlackTree(h_indices2, h_values2, n, flatValues2.data(), flatValues2.size());
 
 
     delete[] h_indices;
     delete[] h_indices2;
+    delete[] h_indices3;
     return 0;
 }
