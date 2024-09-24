@@ -7,6 +7,10 @@
 #include <climits>
 #include <algorithm>
 #include <set>
+// Include Thrust headers
+#include <thrust/device_vector.h>
+#include <thrust/device_ptr.h>
+#include <thrust/scan.h>
 
 __device__ int id_to_index[128] = {
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -121,16 +125,35 @@ std::vector<std::vector<int>> hyperedgeAdjacency(
     return hyperedgeAdjacencyMatrix;
 }
 
-int nextMultipleOf32(int num) {
+__host__ __device__ int nextMultipleOf32(int num) {
     return ((num + 32) / 32) * 32;
 }
 
-int nextMultipleOf4(int num) {
+__host__ __device__ int nextMultipleOf4(int num) {
     if (num == 0)
         return 0;
     return ((num + 4) / 4) * 4;
 }
+// Kernel to compute next multiple of 4 for each third element
+__global__ void computeNextMultipleOf4(int* partialSolution, int* tmp, int K)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < K)
+    {
+        int val = partialSolution[3*idx + 2];
+        tmp[idx] = nextMultipleOf4(val);
+    }
+}
 
+// Kernel to update partialSolution with the prefix sum results
+__global__ void updatePartialSolution(int* partialSolution, int* tmp, int K)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < K)
+    {
+        partialSolution[3*idx + 2] = tmp[idx];
+    }
+}
 std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
     std::vector<int> vec1d;
     std::vector<int> vec2dto1d(vec2d.size());
@@ -745,14 +768,27 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
 
     
 
-    checkCuda(cudaMemcpy(partialSolution.data(), d_partialSolution, insertSizes.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
-    printVector(partialSolution, "Partial solution");
-    
+    // Now perform cumPartialSol in parallel on device
+    int K = insertIndices.size();
+    int* d_tmp;
+    checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
 
-    cumPartialSol(partialSolution);
-    checkCuda(cudaMemcpy(d_partialSolution, partialSolution.data(), insertSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
 
+    // Perform inclusive scan over d_tmp using Thrust
+    thrust::device_ptr<int> tmp_ptr = thrust::device_pointer_cast(d_tmp);
+    thrust::inclusive_scan(tmp_ptr, tmp_ptr + K, tmp_ptr);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Update partialSolution[3*k+2] = tmp[k];
+    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Copy partialSolution back to host and print
+    checkCuda(cudaMemcpy(partialSolution.data(), d_partialSolution, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(partialSolution, "Cumulative Partial solution");
+
 
     printf("Space available from: %d \n", flatValuesSize);
 
@@ -855,14 +891,24 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
 
     
 
-    checkCuda(cudaMemcpy(partialSolution2.data(), d_partialSolution2, insertSizes2.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
-    printVector(partialSolution2, "Partial solution");
-    
+    K = insertIndices2.size();
+    checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
 
-    cumPartialSol(partialSolution2);
-    checkCuda(cudaMemcpy(d_partialSolution2, partialSolution2.data(), insertSizes2.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
 
-    printVector(partialSolution2, "Cumulative Partial solution");
+    // Perform inclusive scan over d_tmp using Thrust
+    tmp_ptr = thrust::device_pointer_cast(d_tmp);
+    thrust::inclusive_scan(tmp_ptr, tmp_ptr + K, tmp_ptr);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Update partialSolution2[3*k+2] = tmp[k];
+    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Copy partialSolution2 back to host and print
+    checkCuda(cudaMemcpy(partialSolution2.data(), d_partialSolution2, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
+    printVector(partialSolution2, "Cumulative Partial solution for nodes2");
 
     printf("Space available from: %d \n", flatValuesSize2);
 
@@ -967,10 +1013,24 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     printVector(partialSolution3, "Partial solution");
     
 
-    cumPartialSol(partialSolution3);
-    checkCuda(cudaMemcpy(d_partialSolution3, partialSolution3.data(), insertSizes3.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+    K = insertIndices3.size();
+    checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
 
-    printVector(partialSolution3, "Cumulative Partial solution");
+    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Perform inclusive scan over d_tmp using Thrust
+    tmp_ptr = thrust::device_pointer_cast(d_tmp);
+    thrust::inclusive_scan(tmp_ptr, tmp_ptr + K, tmp_ptr);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Update partialSolution3[3*k+2] = tmp[k];
+    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_tmp, K);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Copy partialSolution3 back to host and print
+    checkCuda(cudaMemcpy(partialSolution3.data(), d_partialSolution3, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
+    printVector(partialSolution3, "Cumulative Partial solution for nodes3");
 
     printf("Space available from: %d \n", flatValuesSize3);
 
@@ -1022,9 +1082,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
 
     updateCount<<<(n + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_nodes2, d_flatValues2, d_nodes3, d_flatValues3, n, d_partialResults, fixedSize);
 
-    
-
-   
+    checkCuda(cudaDeviceSynchronize());
 
 
 // Free device memory
