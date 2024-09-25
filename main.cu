@@ -221,7 +221,7 @@ struct RBTreeNode {
     int value;
     int length;
     int size;
-    bool color; // Red or Black
+    int empty; // Red or Black
     RBTreeNode* left;
     RBTreeNode* right;
     RBTreeNode* parent;
@@ -274,7 +274,7 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
 __global__ void colorNodes(RBTreeNode* nodes, int n) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < n) {
-        nodes[tid].color = (tid % 2 == 0); // Simplified coloring: alternating red (false) and black (true)
+        nodes[tid].empty = 0; // Simplified coloring: alternating red (false) and black (true)
     }
 }
 
@@ -292,8 +292,8 @@ __global__ void printEachNode(RBTreeNode* nodes, int n) {
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d, Color = %s\n",
-                   tid, current->index, current->value, current->length, current->size, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d, Empty = %d\n",
+                   tid, current->index, current->value, current->length, current->size, current->empty);
         }
     }
 }
@@ -311,8 +311,8 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
-                   searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Empty = %d\n",
+                   searchIndex, current->index, current->value, current->length, current->empty );
         } else {
             printf("Node %d: Not Found\n", searchIndex);
         }
@@ -341,7 +341,7 @@ __global__ void findContents(RBTreeNode* nodes, int* searchIndices, int searchSi
             }
             printf("\n");
 
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n", searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Empty = %d\n", searchIndex, current->index, current->value, current->length, current->empty);
         } else {
             
             printf("Node %d: Not Found\n", searchIndex);
@@ -416,6 +416,46 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
         }
     }
 }
+
+__global__ void deleteNode(
+    RBTreeNode* nodes,
+    int* deleteIndices,
+    int deleteSize
+)
+{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < deleteSize) {
+        int deleteIndex = deleteIndices[tid];
+        RBTreeNode* current = nodes;
+        while (current != nullptr && current->index != deleteIndex) {
+            if (current->index > deleteIndex) {
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        if (current != nullptr) {
+            if (current->left != nullptr && current->right != nullptr)
+            {
+                current->empty = current->left->empty + current->left->empty;
+            }
+            else if(current->left == nullptr && current->right != nullptr)
+            {
+                current->empty = current->right->empty;
+            }
+            else if(current->left != nullptr && current->right == nullptr)
+            {
+                current->empty = current->left->empty;
+            }
+            else if(current->left == nullptr && current->right == nullptr)
+            {
+                current->empty = 0;
+            }
+            current= current->parent;
+        }
+    }
+}
+
 
 __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize){
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -798,6 +838,34 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     std::vector<int> updatedFlatValues(fixedSize);
     checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
+
+// deleteNode
+    // Prepare data for deletion
+    std::vector<int> deleteIndices = {2, 4, 6};  // Your deleteVector
+    int deleteSize = deleteIndices.size();
+
+    // Allocate device memory for deletion arrays
+    int* d_deleteIndices;
+    checkCuda(cudaMalloc(&d_deleteIndices, deleteSize * sizeof(int)));
+
+    // Copy data to device
+    checkCuda(cudaMemcpy(d_deleteIndices, deleteIndices.data(), deleteSize * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Launch the deleteNode kernel
+    blockSize = 256;
+    numBlocks = (deleteSize + blockSize - 1) / blockSize;
+
+    deleteNode<<<numBlocks, blockSize>>>(
+        d_nodes,
+        d_deleteIndices,
+        deleteSize
+    );
+
+    checkCuda(cudaDeviceSynchronize());
+
+    // Free device memory
+    checkCuda(cudaFree(d_deleteIndices));
+
 
 
 
