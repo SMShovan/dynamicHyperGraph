@@ -5,17 +5,19 @@ CXX = g++
 NVCC_FLAGS = -std=c++11 -O2
 CXX_FLAGS = -std=c++11 -O2 -Wall
 
-# Target executable
-TARGET = main
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
+TARGET = $(BUILD_DIR)/main
 
 # Source files
-CUDA_SOURCES = main.cu
-CPP_SOURCES = graphGeneration.cpp
-HEADERS = graphGeneration.hpp
+CUDA_SOURCES = $(SRC_DIR)/main.cu
+CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp
+HEADERS = $(SRC_DIR)/graphGeneration.hpp
 
 # Object files
-CUDA_OBJECTS = $(CUDA_SOURCES:.cu=.o)
-CPP_OBJECTS = $(CPP_SOURCES:.cpp=.o)
+CUDA_OBJECTS = $(BUILD_DIR)/main.o
+CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o
 
 # Default target
 all: $(TARGET)
@@ -25,20 +27,22 @@ $(TARGET): $(CUDA_OBJECTS) $(CPP_OBJECTS)
 	$(NVCC) $(NVCC_FLAGS) -o $(TARGET) $(CUDA_OBJECTS) $(CPP_OBJECTS)
 
 # Compile CUDA source files
-%.o: %.cu $(HEADERS)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS)
+	@mkdir -p $(BUILD_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile C++ source files
-%.o: %.cpp $(HEADERS)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
+	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_FLAGS) -c $< -o $@
 
 # Run the program
 run: $(TARGET)
-	./$(TARGET)
+	$(TARGET)
 
 # Clean build artifacts
 clean:
-	rm -f $(TARGET) $(CUDA_OBJECTS) $(CPP_OBJECTS)
+	rm -rf $(BUILD_DIR)
 
 # Clean and rebuild
 rebuild: clean all

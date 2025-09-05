@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+*.o
+*.exe
+*.out
+*.app
+
+# CUDA specific
+*.cubin
+*.fatbin
+*.ptx
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Compiled binaries
+main
+test4
