@@ -2,22 +2,24 @@
 # Compiler and flags
 NVCC = nvcc
 CXX = g++
-NVCC_FLAGS = -std=c++11 -O2
-CXX_FLAGS = -std=c++11 -O2 -Wall
+NVCC_FLAGS = -std=c++17 -O2
+CXX_FLAGS = -std=c++17 -O2 -Wall
 
 # Directories
 SRC_DIR = src
+UTILS_DIR = utils
+INCLUDE_DIR = include
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/main
 
 # Source files
 CUDA_SOURCES = $(SRC_DIR)/main.cu
-CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp
-HEADERS = $(SRC_DIR)/graphGeneration.hpp
+CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp $(UTILS_DIR)/utils.cpp $(UTILS_DIR)/printUtils.cpp
+HEADERS = $(INCLUDE_DIR)/graphGeneration.hpp $(INCLUDE_DIR)/utils.hpp $(INCLUDE_DIR)/printUtils.hpp
 
 # Object files
 CUDA_OBJECTS = $(BUILD_DIR)/main.o
-CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o
+CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o $(BUILD_DIR)/utils.o $(BUILD_DIR)/printUtils.o
 
 # Default target
 all: $(TARGET)
@@ -29,16 +31,25 @@ $(TARGET): $(CUDA_OBJECTS) $(CPP_OBJECTS)
 # Compile CUDA source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
-	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
 # Compile C++ source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXX_FLAGS) -c $< -o $@
+	$(CXX) $(CXX_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
-# Run the program
+# Compile utility source files
+$(BUILD_DIR)/%.o: $(UTILS_DIR)/%.cpp $(HEADERS)
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+# Run the program with default parameters
 run: $(TARGET)
-	$(TARGET)
+	$(TARGET) 8 5 1 100
+
+# Run with custom parameters (usage: make run-custom ARGS="10 3 1 50")
+run-custom: $(TARGET)
+	$(TARGET) $(ARGS)
 
 # Clean build artifacts
 clean:
@@ -54,12 +65,18 @@ install:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all      - Build the project (default)"
-	@echo "  run      - Build and run the program"
-	@echo "  clean    - Remove build artifacts"
-	@echo "  rebuild  - Clean and rebuild"
-	@echo "  install  - Show installation instructions"
-	@echo "  help     - Show this help message"
+	@echo "  all         - Build the project (default)"
+	@echo "  run         - Build and run with default parameters (8 5 1 100)"
+	@echo "  run-custom  - Run with custom parameters (make run-custom ARGS=\"10 3 1 50\")"
+	@echo "  clean       - Remove build artifacts"
+	@echo "  rebuild     - Clean and rebuild"
+	@echo "  install     - Show installation instructions"
+	@echo "  help        - Show this help message"
+	@echo ""
+	@echo "Usage examples:"
+	@echo "  make run                    # Run with default: 8 hyperedges, 5 max vertices, IDs 1-100"
+	@echo "  make run-custom ARGS=\"10 3 1 50\"  # Run with: 10 hyperedges, 3 max vertices, IDs 1-50"
+	@echo "  ./build/main 20 4 1 200    # Direct execution with custom parameters"
 
 # Phony targets
-.PHONY: all run clean rebuild install help
+.PHONY: all run run-custom clean rebuild install help

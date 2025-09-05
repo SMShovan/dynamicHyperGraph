@@ -11,8 +11,9 @@
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
-// Include our graph generation functions
-#include "graphGeneration.hpp"
+// Include our utility functions
+#include "../include/utils.hpp"
+#include "../include/printUtils.hpp"
 
 __device__ int id_to_index[128] = {
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -37,7 +38,7 @@ __device__ int id_to_index[128] = {
 __device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc, int C_ca, int g_abc, int* motif_counts, int n, int idx) {
 
 
-    int count = 0;
+    // int count = 0; // Unused variable
 
     int a = deg_a - (C_ab + C_ca) + g_abc;
     int b = deg_b - (C_bc + C_ab) + g_abc;
@@ -58,37 +59,6 @@ __device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc,
 
 
 
-std::vector<std::vector<int>> hyperedgeAdjacency(
-    const std::vector<std::vector<int>>& vertexToHyperedge, 
-    const std::vector<std::vector<int>>& hyperedgeToVertex) {
-    
-    int nHyperedges = hyperedgeToVertex.size();
-    
-    // Resultant adjacency matrix for hyperedges
-    std::vector<std::vector<int>> hyperedgeAdjacencyMatrix(nHyperedges);
-
-    // Iterate through each hyperedge
-    for (int hyperedge = 0; hyperedge < nHyperedges; ++hyperedge) {
-        std::set<int> adjacentHyperedges;
-
-        // Get the vertices connected by this hyperedge
-        const std::vector<int>& vertices = hyperedgeToVertex[hyperedge];
-
-        // For each vertex, find other hyperedges connected to it
-        for (int vertex : vertices) {
-            for (int otherHyperedge : vertexToHyperedge[vertex]) {
-                if (otherHyperedge != hyperedge + 1) {  // Avoid self-loop
-                    adjacentHyperedges.insert(otherHyperedge); // Ensure no duplicates
-                }
-            }
-        }
-
-        // Convert set to vector and store in adjacency matrix
-        hyperedgeAdjacencyMatrix[hyperedge] = std::vector<int>(adjacentHyperedges.begin(), adjacentHyperedges.end());
-    }
-
-    return hyperedgeAdjacencyMatrix;
-}
 
 __host__ __device__ int nextMultipleOf32(int num) {
     return ((num + 32) / 32) * 32;
@@ -144,13 +114,6 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
 }
 
 
-void printVector(const std::vector<int>& vec, const std::string& name) {
-    std::cout << name << ": [ ";
-    for (int val : vec) {
-        std::cout << val << " ";
-    }
-    std::cout << "]" << std::endl;
-}
 
 void checkCuda(cudaError_t result) {
     if (result != cudaSuccess) {
@@ -394,7 +357,7 @@ __global__ void deleteNode(
 __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize){
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
-        int insertIndex = insertIndices[tid];
+        // int insertIndex = insertIndices[tid]; // Unused variable
         int* values;
         int numValues; 
         if (tid == 0){
@@ -417,7 +380,7 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
             if (partialSolution[lenPartialSolution] == partialSolution[lenPartialSolution - 3] )
                 return;
         
-        int startIdx, endIdx;
+        int startIdx; // int endIdx; // Unused variable
         int storeStartIdx;
         if (tid == 0)
         {
@@ -539,7 +502,7 @@ __global__ void updateCount(CBSTNode * d_h2vNodes, int* d_h2vFlatvalues,
     
     if (idx < size) {
 // Partial result startPointer
-        int* startPointer = d_partialResults + idx * 30;
+        // int* startPointer = d_partialResults + idx * 30; // Unused variable
 // Find the address of the starting node of the hyperedge idx
         int searchIndex = idx;
         CBSTNode* id_a = d_h2vNodes;
@@ -1099,72 +1062,42 @@ void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int
     checkCuda(cudaFree(d_flatValues2));
 }
 
-int main() {
-    int n = 8;
-    std::vector<std::vector<int>> hyperedgeToVertex = hyperedge2vertex(n, 5, 1, 100);
-    std::vector<std::vector<int>> vertexToHyperedge = vertex2hyperedge(hyperedgeToVertex);
-    std::cout<< "Hyperedge to vertex"<< std::endl;
-    print2DVector(hyperedgeToVertex);
-    std::cout<< "Vertex to hyperedge"<< std::endl;
-    print2DVector(vertexToHyperedge);
-    std::vector<std::vector<int>> h2h = hyperedgeAdjacency(vertexToHyperedge, hyperedgeToVertex);
-    std::cout<< "Hyperedge to hyperedge"<< std::endl;
-    print2DVector(h2h);
 
-
-    // Flatten the 2D vector
-    auto flattened = flatten2DVector(hyperedgeToVertex);
-    auto flattened2 = flatten2DVector(vertexToHyperedge);
-    auto flattened3 = flatten2DVector(h2h);
-
-    std::vector<int> flatValues = flattened.first;
-    std::vector<int> flatIndices = flattened.second;
-
-    std::vector<int> flatValues2 = flattened2.first;
-    std::vector<int> flatIndices2 = flattened2.second;
-
-    std::vector<int> flatValues3 = flattened3.first;
-    std::vector<int> flatIndices3 = flattened3.second;
-
-
-
-    // Print the flattened vectors
-    printVector(flatValues, "Flattened Values (vec1d)");
-    printVector(flatIndices, "Flattened Indices (vec2dto1d)");
-
-    printVector(flatValues2, "Flattened Values2 (vec1d)");
-    printVector(flatIndices2, "Flattened Indices2 (vec2dto1d)");
-
-    printVector(flatValues3, "Flattened Values3 (vec1d)");
-    printVector(flatIndices3, "Flattened Indices3 (vec2dto1d)");
-
-
-
-    int* h_values = flatIndices.data();
-    int* h_indices = new int[flatIndices.size()];
-    for (size_t i = 0; i < flatIndices.size(); ++i) {
-        h_indices[i] = i + 1;
+int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    HypergraphParams params;
+    if (!parseCommandLineArgs(argc, argv, params)) {
+        return 1;
     }
+    
+    // Print parameters
+    printHypergraphParams(params);
+    
+    // Generate hypergraph mappings
+    auto [hyperedgeToVertex, vertexToHyperedge] = generateHypergraph(params);
+    
+    // Generate hyperedge-to-hyperedge adjacency
+    std::vector<std::vector<int>> hyperedge2hyperedge = hyperedgeAdjacency(vertexToHyperedge, hyperedgeToVertex);
+    std::cout << "Hyperedge to hyperedge" << std::endl;
+    print2DVector(hyperedge2hyperedge);
 
-    int* h_values2 = flatIndices2.data();
-    int* h_indices2 = new int[flatIndices2.size()];
-    for (size_t i = 0; i < flatIndices2.size(); ++i) {
-        h_indices2[i] = i + 1;
-    }
+    // Flatten the 2D vectors for GPU processing
+    auto [flatValuesH2V, flatIndicesH2V] = flatten(hyperedgeToVertex, "Hyperedge to Vertex");
+    auto [flatValuesV2H, flatIndicesV2H] = flatten(vertexToHyperedge, "Vertex to Hyperedge");
+    auto [flatValuesH2H, flatIndicesH2H] = flatten(hyperedge2hyperedge, "Hyperedge to Hyperedge");
 
-    int* h_values3 = flatIndices3.data();
-    int* h_indices3 = new int[flatIndices3.size()];
-    for (size_t i = 0; i < flatIndices3.size(); ++i) {
-        h_indices3[i] = i + 1;
-    }
+    // Prepare data for Complete Binary Search Tree construction
+    auto [h_valuesH2V, h_indicesH2V] = prepareCBSTData(flatIndicesH2V);
+    auto [h_valuesV2H, h_indicesV2H] = prepareCBSTData(flatIndicesV2H);
+    auto [h_valuesH2H, h_indicesH2H] = prepareCBSTData(flatIndicesH2H);
 
+    // Construct Complete Binary Search Trees and perform analysis
+    constructCompleteBinarySearchTree(h_indicesH2V, h_valuesH2V, params.numHyperedges, flatValuesH2V.data(), flatValuesH2V.size(), h_indicesV2H, h_valuesV2H, flatValuesV2H.data(), flatValuesV2H.size(), h_indicesH2H, h_valuesH2H, flatValuesH2H.data(), flatValuesH2H.size());
 
-    constructCompleteBinarySearchTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size(),  h_indices3, h_values3, flatValues3.data(), flatValues3.size());
-
-
-
-    delete[] h_indices;
-    delete[] h_indices2;
-    delete[] h_indices3;
+    // Clean up memory
+    delete[] h_indicesH2V;
+    delete[] h_indicesV2H;
+    delete[] h_indicesH2H;
+    
     return 0;
 }

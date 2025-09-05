@@ -8,8 +8,14 @@ A CUDA-based implementation for motif counting in dynamic hypergraphs using Comp
 # Build the project
 make
 
-# Run the program
+# Run the program with default parameters
 make run
+
+# Run with custom parameters
+./build/main <num_hyperedges> <max_vertices_per_hyperedge> <min_vertex_id> <max_vertex_id>
+
+# Example: 10 hyperedges, up to 3 vertices each, vertex IDs 1-50
+./build/main 10 3 1 50
 
 # Clean build artifacts
 make clean
