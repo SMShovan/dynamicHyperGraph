@@ -11,6 +11,8 @@
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
+// Include our graph generation functions
+#include "graphGeneration.hpp"
 
 __device__ int id_to_index[128] = {
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -55,43 +57,6 @@ __device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc,
 
 
 
-//Function to create a random 2-D vector
-std::vector<std::vector<int>> createRandom2DVector(int n, int m, int r1, int r2) {
-    std::vector<std::vector<int>> vec2d(n);
-    std::srand(std::time(0)); // Seed for random number generation
-
-    for (int i = 0; i < n; ++i) {
-        int innerSize = rand() % m + 1; // Random inner size from 1 to m
-        vec2d[i].resize(innerSize);
-        for (int j = 0; j < innerSize; ++j) {
-            vec2d[i][j] = rand() % (r2 - r1 + 1) + r1; // Random value in range [r1, r2]
-        }
-    }
-
-    return vec2d;
-}
-
-std::vector<std::vector<int>> alternate(const std::vector<std::vector<int>>& random2DVec) {
-    // Step 1: Find the maximum value in random2DVec
-    int maxValue = 0;
-    for (const auto& row : random2DVec) {
-        if (!row.empty()) {
-            maxValue = std::max(maxValue, *std::max_element(row.begin(), row.end()));
-        }
-    }
-
-    // Step 2: Initialize alter2DVec with size maxValue + 1 (to handle 0-indexing)
-    std::vector<std::vector<int>> alter2DVec(maxValue + 1);
-
-    // Step 3: Populate alter2DVec with indices from random2DVec
-    for (int rowIndex = 0; rowIndex < random2DVec.size(); ++rowIndex) {
-        for (int value : random2DVec[rowIndex]) {
-            alter2DVec[value].push_back(rowIndex + 1);  // Insert the row index at the position of the value
-        }
-    }
-
-    return alter2DVec;
-}
 
 std::vector<std::vector<int>> hyperedgeAdjacency(
     const std::vector<std::vector<int>>& vertexToHyperedge, 
@@ -178,15 +143,6 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
     return {vec1d, vec2dto1d};
 }
 
-void print2DVector(const std::vector<std::vector<int>>& vec2d) {
-    std::cout << "2D Vector (Matrix Form):" << std::endl;
-    for (const auto& row : vec2d) {
-        for (int val : row) {
-            std::cout << val << " ";
-        }
-        std::cout << std::endl;
-    }
-}
 
 void printVector(const std::vector<int>& vec, const std::string& name) {
     std::cout << name << ": [ ";
@@ -215,20 +171,19 @@ __device__ int floor_log2(int x) {
     return log;
 }
 
-// Structure for Red-Black Tree Node
-struct RBTreeNode {
+// Structure for Complete Binary Search Tree Node
+struct CBSTNode {
     int index;
     int value;
     int length;
     int size;
-    int empty; // Red or Black
-    RBTreeNode* left;
-    RBTreeNode* right;
-    RBTreeNode* parent;
+    CBSTNode* left;
+    CBSTNode* right;
+    CBSTNode* parent;
 };
 
 // Kernel to build an empty binary tree
-__global__ void buildEmptyBinaryTree(RBTreeNode* nodes, int n) {
+__global__ void buildEmptyBinaryTree(CBSTNode* nodes, int n) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < n) {
         nodes[tid].index = tid;
@@ -239,7 +194,7 @@ __global__ void buildEmptyBinaryTree(RBTreeNode* nodes, int n) {
 }
 
 // Kernel to store items into internal nodes
-__global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values, int n, int totalSize) {
+__global__ void storeItemsIntoNodes(CBSTNode* nodes, int* indices, int* values, int n, int totalSize) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < n) {
         int log2_tid = floor_log2(tid + 1);
@@ -270,20 +225,13 @@ __global__ void storeItemsIntoNodes(RBTreeNode* nodes, int* indices, int* values
     }
 }
 
-// Kernel to color the nodes red or black
-__global__ void colorNodes(RBTreeNode* nodes, int n) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < n) {
-        nodes[tid].empty = 0; // Simplified coloring: alternating red (false) and black (true)
-    }
-}
 
 
 // Kernel to print each node from the device
-__global__ void printEachNode(RBTreeNode* nodes, int n) {
+__global__ void printEachNode(CBSTNode* nodes, int n) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid <= n) {
-        RBTreeNode* current = nodes;
+        CBSTNode* current = nodes;
         while (current != nullptr && current->index != tid) {
             if (current->index > tid) {
                 current = current->left;
@@ -292,17 +240,17 @@ __global__ void printEachNode(RBTreeNode* nodes, int n) {
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d, Empty = %d\n",
-                   tid, current->index, current->value, current->length, current->size, current->empty);
+            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d\n",
+                   tid, current->index, current->value, current->length, current->size);
         }
     }
 }
 // Kernel to find and print nodes in the tree
-__global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) {
+__global__ void findNode(CBSTNode* nodes, int* searchIndices, int searchSize) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < searchSize) {
         int searchIndex = searchIndices[tid];
-        RBTreeNode* current = nodes;
+        CBSTNode* current = nodes;
         while (current != nullptr && current->index != searchIndex) {
             if (current->index > searchIndex) {
                 current = current->left;
@@ -311,19 +259,19 @@ __global__ void findNode(RBTreeNode* nodes, int* searchIndices, int searchSize) 
             }
         }
         if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Empty = %d\n",
-                   searchIndex, current->index, current->value, current->length, current->empty );
+            printf("Node %d: Index = %d, Value = %d, Length = %d\n",
+                   searchIndex, current->index, current->value, current->length);
         } else {
             printf("Node %d: Not Found\n", searchIndex);
         }
     }
 }
 
-__global__ void findContents(RBTreeNode* nodes, int* searchIndices, int searchSize, int* flatValues) {
+__global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < searchSize) {
         int searchIndex = searchIndices[tid];
-        RBTreeNode* current = nodes;
+        CBSTNode* current = nodes;
         while (current != nullptr && current->index != searchIndex) {
             if (current->index > searchIndex) {
                 current = current->left;
@@ -341,7 +289,7 @@ __global__ void findContents(RBTreeNode* nodes, int* searchIndices, int searchSi
             }
             printf("\n");
 
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Empty = %d\n", searchIndex, current->index, current->value, current->length, current->empty);
+            printf("Node %d: Index = %d, Value = %d, Length = %d\n", searchIndex, current->index, current->value, current->length);
         } else {
             
             printf("Node %d: Not Found\n", searchIndex);
@@ -349,7 +297,7 @@ __global__ void findContents(RBTreeNode* nodes, int* searchIndices, int searchSi
     }
 }
 
-__global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
+__global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
         int insertIndex = insertIndices[tid];
@@ -364,7 +312,7 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
             numValues = insertSizes[tid] - insertSizes[tid - 1];
         }
         // Search for the node by index
-        RBTreeNode* current = nodes;
+        CBSTNode* current = nodes;
         while (current != nullptr && current->index != insertIndex) {
             if (current->index > insertIndex) {
                 current = current->left;
@@ -418,7 +366,7 @@ __global__ void insertNode(RBTreeNode* nodes, int* flatValues, int* insertIndice
 }
 
 __global__ void deleteNode(
-    RBTreeNode* nodes,
+    CBSTNode* nodes,
     int* deleteIndices,
     int deleteSize
 )
@@ -426,7 +374,7 @@ __global__ void deleteNode(
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < deleteSize) {
         int deleteIndex = deleteIndices[tid];
-        RBTreeNode* current = nodes;
+        CBSTNode* current = nodes;
         while (current != nullptr && current->index != deleteIndex) {
             if (current->index > deleteIndex) {
                 current = current->left;
@@ -435,23 +383,9 @@ __global__ void deleteNode(
             }
         }
         if (current != nullptr) {
-            if (current->left != nullptr && current->right != nullptr)
-            {
-                current->empty = current->left->empty + current->left->empty;
-            }
-            else if(current->left == nullptr && current->right != nullptr)
-            {
-                current->empty = current->right->empty;
-            }
-            else if(current->left != nullptr && current->right == nullptr)
-            {
-                current->empty = current->left->empty;
-            }
-            else if(current->left == nullptr && current->right == nullptr)
-            {
-                current->empty = 0;
-            }
-            current= current->parent;
+            // Simple deletion logic - mark node as deleted by setting index to -1
+            current->index = -1;
+            current = current->parent;
         }
     }
 }
@@ -597,9 +531,9 @@ __device__ int group(int* d_h2vFlatvalues, int loc_a, int loc_b, int loc_c) {
     return count;
 }
 
-__global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues, 
-                            RBTreeNode * d_v2hNodes, int* d_v2hFlatvalues, 
-                            RBTreeNode * d_h2hNodes, int* d_h2hFlatvalues, int size, int * d_partialResults, int fixedSize) {
+__global__ void updateCount(CBSTNode * d_h2vNodes, int* d_h2vFlatvalues, 
+                            CBSTNode * d_v2hNodes, int* d_v2hFlatvalues, 
+                            CBSTNode * d_h2hNodes, int* d_h2hFlatvalues, int size, int * d_partialResults, int fixedSize) {
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -608,7 +542,7 @@ __global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues,
         int* startPointer = d_partialResults + idx * 30;
 // Find the address of the starting node of the hyperedge idx
         int searchIndex = idx;
-        RBTreeNode* id_a = d_h2vNodes;
+        CBSTNode* id_a = d_h2vNodes;
         while (id_a != nullptr && id_a->index != searchIndex) {
             if (id_a->index > searchIndex) {
                 id_a = id_a->left;
@@ -625,7 +559,7 @@ __global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues,
 
 // Now search por adjacent hyperedge of a
             searchIndex = idx;
-            RBTreeNode* id_b = d_h2vNodes;
+            CBSTNode* id_b = d_h2vNodes;
             while (id_b != nullptr && id_b->index != searchIndex) {
                 if (id_b->index > searchIndex) {
                     id_b = id_b->left;
@@ -652,7 +586,7 @@ __global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues,
 // Now process triangles 
                     searchIndex = d_h2hFlatvalues[temp_loc_a]; 
 
-                    RBTreeNode* id_c = d_h2vNodes;
+                    CBSTNode* id_c = d_h2vNodes;
                     while (id_c != nullptr && id_c->index != searchIndex) {
                         if (id_c->index > searchIndex) {
                             id_c = id_c->left;
@@ -714,7 +648,7 @@ __global__ void updateCount(RBTreeNode * d_h2vNodes, int* d_h2vFlatvalues,
 }
 
 
-void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2, int* h_indices3, int* h_values3, int* flatValues3, int flatValuesSize3) {
+void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2, int* h_indices3, int* h_values3, int* flatValues3, int flatValuesSize3) {
     const int fixedSize = 1024; // Fixed size for d_flatValues
 
 //hyperedge2node
@@ -725,7 +659,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
         return;
     }
 
-    RBTreeNode* d_nodes;
+    CBSTNode* d_nodes;
     int* d_indices;
     int* d_values;
     int* d_flatValues;
@@ -735,7 +669,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_partialSolution;
 
     // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_nodes, n * sizeof(CBSTNode)));
     checkCuda(cudaMalloc(&d_indices, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_values, n * sizeof(int)));
 
@@ -771,9 +705,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_indices, d_values, n, flatValuesSize);
     checkCuda(cudaDeviceSynchronize());
 
-    // Step 3: Color the nodes
-    colorNodes<<<numBlocks, blockSize>>>(d_nodes, n);
-    checkCuda(cudaDeviceSynchronize());
+    // Step 3: Tree construction complete
 
     // Print each node from the device
     std::cout << "Printing the tree from the device:" << std::endl;
@@ -802,7 +734,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(d_insertSizes, insertSizes.data(), insertSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_partialSolution, partialSolution.data(), insertSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
 
-    // Insert nodes into the Red-Black Tree
+    // Insert nodes into the Complete Binary Search Tree
     insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size(), d_partialSolution);
     checkCuda(cudaDeviceSynchronize());
 
@@ -876,7 +808,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
         return;
     }
 
-    RBTreeNode* d_nodes2;
+    CBSTNode* d_nodes2;
     int* d_indices2;
     int* d_values2;
     int* d_flatValues2;
@@ -886,7 +818,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_partialSolution2;
 
     // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes2, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_nodes2, n * sizeof(CBSTNode)));
     checkCuda(cudaMalloc(&d_indices2, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_values2, n * sizeof(int)));
 
@@ -922,9 +854,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes2, d_indices2, d_values2, n, flatValuesSize2);
     checkCuda(cudaDeviceSynchronize());
 
-    // Step 3: Color the nodes
-    colorNodes<<<numBlocks, blockSize>>>(d_nodes2, n);
-    checkCuda(cudaDeviceSynchronize());
+    // Step 3: Tree construction complete
 
     // Print each node from the device
     std::cout << "Printing the tree from the device:" << std::endl;
@@ -953,7 +883,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(d_insertSizes2, insertSizes2.data(), insertSizes2.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_partialSolution2, partialSolution2.data(), insertSizes2.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
 
-    // Insert nodes into the Red-Black Tree
+    // Insert nodes into the Complete Binary Search Tree
     insertNode<<<(insertIndices2.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes2, d_flatValues2, d_insertIndices2, d_insertValues2, d_insertSizes2, insertIndices2.size(), d_partialSolution2);
     checkCuda(cudaDeviceSynchronize());
 
@@ -994,7 +924,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
         return;
     }
 
-    RBTreeNode* d_nodes3;
+    CBSTNode* d_nodes3;
     int* d_indices3;
     int* d_values3;
     int* d_flatValues3;
@@ -1004,7 +934,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     int* d_partialSolution3;
 
     // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes3, n * sizeof(RBTreeNode)));
+    checkCuda(cudaMalloc(&d_nodes3, n * sizeof(CBSTNode)));
     checkCuda(cudaMalloc(&d_indices3, n * sizeof(int)));
     checkCuda(cudaMalloc(&d_values3, n * sizeof(int)));
 
@@ -1040,9 +970,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes3, d_indices3, d_values3, n, flatValuesSize3);
     checkCuda(cudaDeviceSynchronize());
 
-    // Step 3: Color the nodes
-    colorNodes<<<numBlocks, blockSize>>>(d_nodes3, n);
-    checkCuda(cudaDeviceSynchronize());
+    // Step 3: Tree construction complete
 
     // Print each node from the device
     std::cout << "Printing the tree from the device:" << std::endl;
@@ -1071,7 +999,7 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
     checkCuda(cudaMemcpy(d_insertSizes3, insertSizes3.data(), insertSizes3.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(d_partialSolution3, partialSolution3.data(), insertSizes3.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
 
-    // Insert nodes into the Red-Black Tree
+    // Insert nodes into the Complete Binary Search Tree
     insertNode<<<(insertIndices3.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes3, d_flatValues3, d_insertIndices3, d_insertValues3, d_insertSizes3, insertIndices3.size(), d_partialSolution3);
     checkCuda(cudaDeviceSynchronize());
 
@@ -1173,20 +1101,20 @@ void constructRedBlackTree(int* h_indices, int* h_values, int n, int* flatValues
 
 int main() {
     int n = 8;
-    std::vector<std::vector<int>> random2DVec = createRandom2DVector(n, 5, 1, 100);
-    std::vector<std::vector<int>> alter2DVec = alternate(random2DVec);
+    std::vector<std::vector<int>> hyperedgeToVertex = hyperedge2vertex(n, 5, 1, 100);
+    std::vector<std::vector<int>> vertexToHyperedge = vertex2hyperedge(hyperedgeToVertex);
     std::cout<< "Hyperedge to vertex"<< std::endl;
-    print2DVector(random2DVec);
+    print2DVector(hyperedgeToVertex);
     std::cout<< "Vertex to hyperedge"<< std::endl;
-    print2DVector(alter2DVec);
-    std::vector<std::vector<int>> h2h = hyperedgeAdjacency(alter2DVec, random2DVec);
+    print2DVector(vertexToHyperedge);
+    std::vector<std::vector<int>> h2h = hyperedgeAdjacency(vertexToHyperedge, hyperedgeToVertex);
     std::cout<< "Hyperedge to hyperedge"<< std::endl;
     print2DVector(h2h);
 
 
     // Flatten the 2D vector
-    auto flattened = flatten2DVector(random2DVec);
-    auto flattened2 = flatten2DVector(alter2DVec);
+    auto flattened = flatten2DVector(hyperedgeToVertex);
+    auto flattened2 = flatten2DVector(vertexToHyperedge);
     auto flattened3 = flatten2DVector(h2h);
 
     std::vector<int> flatValues = flattened.first;
@@ -1231,9 +1159,8 @@ int main() {
     }
 
 
-    constructRedBlackTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size(),  h_indices3, h_values3, flatValues3.data(), flatValues3.size());
+    constructCompleteBinarySearchTree(h_indices, h_values, n, flatValues.data(), flatValues.size(), h_indices2, h_values2, flatValues2.data(), flatValues2.size(),  h_indices3, h_values3, flatValues3.data(), flatValues3.size());
 
-    //constructRedBlackTree(h_indices2, h_values2, n, flatValues2.data(), flatValues2.size());
 
 
     delete[] h_indices;
