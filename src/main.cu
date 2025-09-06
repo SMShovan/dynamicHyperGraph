@@ -611,104 +611,104 @@ __global__ void updateCount(CBSTNode * d_h2vNodes, int* d_h2vFlatvalues,
 }
 
 
-void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int* flatValues, int flatValuesSize, int* h_indices2, int* h_values2, int* flatValues2, int flatValuesSize2, int* h_indices3, int* h_values3, int* flatValues3, int flatValuesSize3) {
+void constructCompleteBinarySearchTree(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName) {
     const int fixedSize = 1024; // Fixed size for d_flatValues
 
-//hyperedge2node
+// Generic CBST build for one dataset
 
-    // Check if fixedSize is at least flatValuesSize
-    if (fixedSize < flatValuesSize) {
-        std::cerr << "Overflow: fixedSize is less than flatValuesSize" << std::endl;
+    // Check if fixedSize is at least flatPayloadSize
+    if (fixedSize < flatPayloadSize) {
+        std::cerr << "Overflow: fixedSize is less than flatPayloadSize" << std::endl;
         return;
     }
 
     CBSTNode* d_nodes;
-    int* d_indices;
-    int* d_values;
-    int* d_flatValues;
-    int* d_insertIndices;
-    int* d_insertValues;
-    int* d_insertSizes;
-    int* d_partialSolution;
+    int* d_keys;
+    int* d_startOffsets;
+    int* d_flatPayload;
+    int* d_insertKeys;
+    int* d_insertPayload;
+    int* d_insertPrefixSizes;
+    int* d_relocationPlan;
 
     // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes, n * sizeof(CBSTNode)));
-    checkCuda(cudaMalloc(&d_indices, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_values, n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_nodes, numRecords * sizeof(CBSTNode)));
+    checkCuda(cudaMalloc(&d_keys, numRecords * sizeof(int)));
+    checkCuda(cudaMalloc(&d_startOffsets, numRecords * sizeof(int)));
 
     // Allocate fixed memory for d_flatValues
-    checkCuda(cudaMalloc(&d_flatValues, fixedSize * sizeof(int)));
+    checkCuda(cudaMalloc(&d_flatPayload, fixedSize * sizeof(int)));
 
     // Copy first portion from flatValues
-    checkCuda(cudaMemcpy(d_flatValues, flatValues, flatValuesSize * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_flatPayload, flatPayload, flatPayloadSize * sizeof(int), cudaMemcpyHostToDevice));
 
     // Initialize remaining portion to zero
-    checkCuda(cudaMemset(d_flatValues + flatValuesSize, 0, (fixedSize - flatValuesSize) * sizeof(int)));
+    checkCuda(cudaMemset(d_flatPayload + flatPayloadSize, 0, (fixedSize - flatPayloadSize) * sizeof(int)));
 
-    checkCuda(cudaMalloc(&d_insertIndices, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_insertValues, n * 3 * sizeof(int)));  // Allocate max size for values
-    checkCuda(cudaMalloc(&d_insertSizes, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_partialSolution, 3 * n * sizeof(int)));
+    checkCuda(cudaMalloc(&d_insertKeys, numRecords * sizeof(int)));
+    checkCuda(cudaMalloc(&d_insertPayload, numRecords * 3 * sizeof(int)));  // Allocate max size for values
+    checkCuda(cudaMalloc(&d_insertPrefixSizes, numRecords * sizeof(int)));
+    checkCuda(cudaMalloc(&d_relocationPlan, 3 * numRecords * sizeof(int)));
 
-    checkCuda(cudaMemcpy(d_indices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_values, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_keys, keys, numRecords * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_startOffsets, startOffsets, numRecords * sizeof(int), cudaMemcpyHostToDevice));
 
     // Copy dummy insert indices and values for initial tree construction
-    checkCuda(cudaMemcpy(d_insertIndices, h_indices, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues, h_values, n * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertKeys, keys, numRecords * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertPayload, startOffsets, numRecords * sizeof(int), cudaMemcpyHostToDevice));
 
     int blockSize = 256;
-    int numBlocks = (n + blockSize - 1) / blockSize;
+    int numBlocks = (numRecords + blockSize - 1) / blockSize;
 
     // Step 1: Build the empty binary tree
-    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes, n);
+    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes, numRecords);
     checkCuda(cudaDeviceSynchronize());
 
     // Step 2: Store items into internal nodes
-    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_indices, d_values, n, flatValuesSize);
+    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes, d_keys, d_startOffsets, numRecords, flatPayloadSize);
     checkCuda(cudaDeviceSynchronize());
 
     // Step 3: Tree construction complete
 
     // Print each node from the device
-    std::cout << "Printing the tree from the device:" << std::endl;
-    printEachNode<<<numBlocks, blockSize>>>(d_nodes, n);
+    std::cout << "Printing the tree from the device (" << datasetName << "):" << std::endl;
+    printEachNode<<<numBlocks, blockSize>>>(d_nodes, numRecords);
     checkCuda(cudaDeviceSynchronize());
 
     // Prepare data for insertion
     std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
-    std::vector<int> insertIndices(insertVector.size());
-    std::vector<int> insertValues;
-    std::vector<int> insertSizes(insertVector.size());
-    std::vector<int> partialSolution(insertVector.size() * 3, 0);
+    std::vector<int> insertKeys(insertVector.size());
+    std::vector<int> insertPayload;
+    std::vector<int> insertPrefixSizes(insertVector.size());
+    std::vector<int> relocationPlan(insertVector.size() * 3, 0);
     
 
     for (size_t i = 0; i < insertVector.size(); ++i) {
-        insertIndices[i] = insertVector[i].first;
-        insertValues.insert(insertValues.end(), insertVector[i].second.begin(), insertVector[i].second.end());
+        insertKeys[i] = insertVector[i].first;
+        insertPayload.insert(insertPayload.end(), insertVector[i].second.begin(), insertVector[i].second.end());
         if (i == 0)
-            insertSizes[i] = insertVector[i].second.size();
+            insertPrefixSizes[i] = insertVector[i].second.size();
         else 
-            insertSizes[i] = insertSizes[i-1] + insertVector[i].second.size();
+            insertPrefixSizes[i] = insertPrefixSizes[i-1] + insertVector[i].second.size();
     }
 
-    checkCuda(cudaMemcpy(d_insertIndices, insertIndices.data(), insertIndices.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues, insertValues.data(), insertValues.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertSizes, insertSizes.data(), insertSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_partialSolution, partialSolution.data(), insertSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertKeys, insertKeys.data(), insertKeys.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertPayload, insertPayload.data(), insertPayload.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_insertPrefixSizes, insertPrefixSizes.data(), insertPrefixSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(d_relocationPlan, relocationPlan.data(), insertPrefixSizes.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
 
     // Insert nodes into the Complete Binary Search Tree
-    insertNode<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size(), d_partialSolution);
+    insertNode<<<(insertKeys.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatPayload, d_insertKeys, d_insertPayload, d_insertPrefixSizes, insertKeys.size(), d_relocationPlan);
     checkCuda(cudaDeviceSynchronize());
 
     
 
     // Now perform cumPartialSol in parallel on device
-    int K = insertIndices.size();
+    int K = insertKeys.size();
     int* d_tmp;
     checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
 
-    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_tmp, K);
+    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_relocationPlan, d_tmp, K);
     checkCuda(cudaDeviceSynchronize());
 
     // Perform inclusive scan over d_tmp using Thrust
@@ -717,21 +717,21 @@ void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int
     checkCuda(cudaDeviceSynchronize());
 
     // Update partialSolution[3*k+2] = tmp[k];
-    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_tmp, K);
+    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_relocationPlan, d_tmp, K);
     checkCuda(cudaDeviceSynchronize());
 
     // Copy partialSolution back to host and print
-    checkCuda(cudaMemcpy(partialSolution.data(), d_partialSolution, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
-    printVector(partialSolution, "Cumulative Partial solution");
+    checkCuda(cudaMemcpy(relocationPlan.data(), d_relocationPlan, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
+    printVector(relocationPlan, "Cumulative Relocation Plan");
 
 
-    printf("Space available from: %d \n", flatValuesSize);
+    printf("[%s] Space available from: %d \n", datasetName, flatPayloadSize);
 
-    allocateSpace<<<(insertIndices.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution, d_flatValues, flatValuesSize, d_insertIndices, d_insertValues, d_insertSizes, insertIndices.size());
+    allocateSpace<<<(insertKeys.size() + blockSize - 1) / blockSize, blockSize>>>(d_relocationPlan, d_flatPayload, flatPayloadSize, d_insertKeys, d_insertPayload, d_insertPrefixSizes, insertKeys.size());
     checkCuda(cudaDeviceSynchronize());
     // Copy flat values back to host and print them
     std::vector<int> updatedFlatValues(fixedSize);
-    checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatValues, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
+    checkCuda(cudaMemcpy(updatedFlatValues.data(), d_flatPayload, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlatValues, "Updated Flattened Values (vec1d)");
 
 // deleteNode
@@ -764,241 +764,9 @@ void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int
 
 
 
-//node2hyperedge
-    // Check if fixedSize is at least flatValuesSize
-    if (fixedSize < flatValuesSize2) {
-        std::cerr << "Overflow: fixedSize is less than flatValuesSize2" << std::endl;
-        return;
-    }
+// (V2H removed: function is now generic and called per-dataset)
 
-    CBSTNode* d_nodes2;
-    int* d_indices2;
-    int* d_values2;
-    int* d_flatValues2;
-    int* d_insertIndices2;
-    int* d_insertValues2;
-    int* d_insertSizes2;
-    int* d_partialSolution2;
-
-    // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes2, n * sizeof(CBSTNode)));
-    checkCuda(cudaMalloc(&d_indices2, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_values2, n * sizeof(int)));
-
-    // Allocate fixed memory for d_flatValues
-    checkCuda(cudaMalloc(&d_flatValues2, fixedSize * sizeof(int)));
-
-    // Copy first portion from flatValues
-    checkCuda(cudaMemcpy(d_flatValues2, flatValues2, flatValuesSize2 * sizeof(int), cudaMemcpyHostToDevice));
-
-    // Initialize remaining portion to zero
-    checkCuda(cudaMemset(d_flatValues2 + flatValuesSize2, 0, (fixedSize - flatValuesSize2) * sizeof(int)));
-
-    checkCuda(cudaMalloc(&d_insertIndices2, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_insertValues2, n * 3 * sizeof(int)));  // Allocate max size for values
-    checkCuda(cudaMalloc(&d_insertSizes2, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_partialSolution2, 3 * n * sizeof(int)));
-
-    checkCuda(cudaMemcpy(d_indices2, h_indices2, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_values2, h_values2, n * sizeof(int), cudaMemcpyHostToDevice));
-
-    // Copy dummy insert indices and values for initial tree construction
-    checkCuda(cudaMemcpy(d_insertIndices2, h_indices2, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues2, h_values2, n * sizeof(int), cudaMemcpyHostToDevice));
-
-    blockSize = 256;
-    numBlocks = (n + blockSize - 1) / blockSize;
-
-    // Step 1: Build the empty binary tree
-    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes2, n);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Step 2: Store items into internal nodes
-    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes2, d_indices2, d_values2, n, flatValuesSize2);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Step 3: Tree construction complete
-
-    // Print each node from the device
-    std::cout << "Printing the tree from the device:" << std::endl;
-    printEachNode<<<numBlocks, blockSize>>>(d_nodes2, n);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Prepare data for insertion
-    std::vector<std::pair<int, std::vector<int>>> insertVector2 = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
-    std::vector<int> insertIndices2(insertVector2.size());
-    std::vector<int> insertValues2;
-    std::vector<int> insertSizes2(insertVector2.size());
-    std::vector<int> partialSolution2(insertVector2.size() * 3, 0);
-    
-
-    for (size_t i = 0; i < insertVector2.size(); ++i) {
-        insertIndices2[i] = insertVector2[i].first;
-        insertValues2.insert(insertValues2.end(), insertVector2[i].second.begin(), insertVector2[i].second.end());
-        if (i == 0)
-            insertSizes2[i] = insertVector2[i].second.size();
-        else 
-            insertSizes2[i] = insertSizes2[i-1] + insertVector2[i].second.size();
-    }
-
-    checkCuda(cudaMemcpy(d_insertIndices2, insertIndices2.data(), insertIndices2.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues2, insertValues2.data(), insertValues2.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertSizes2, insertSizes2.data(), insertSizes2.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_partialSolution2, partialSolution2.data(), insertSizes2.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
-
-    // Insert nodes into the Complete Binary Search Tree
-    insertNode<<<(insertIndices2.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes2, d_flatValues2, d_insertIndices2, d_insertValues2, d_insertSizes2, insertIndices2.size(), d_partialSolution2);
-    checkCuda(cudaDeviceSynchronize());
-
-    
-
-    K = insertIndices2.size();
-    checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
-
-    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_tmp, K);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Perform inclusive scan over d_tmp using Thrust
-    tmp_ptr = thrust::device_pointer_cast(d_tmp);
-    thrust::inclusive_scan(tmp_ptr, tmp_ptr + K, tmp_ptr);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Update partialSolution2[3*k+2] = tmp[k];
-    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_tmp, K);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Copy partialSolution2 back to host and print
-    checkCuda(cudaMemcpy(partialSolution2.data(), d_partialSolution2, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
-    printVector(partialSolution2, "Cumulative Partial solution for nodes2");
-
-    printf("Space available from: %d \n", flatValuesSize2);
-
-    allocateSpace<<<(insertIndices2.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution2, d_flatValues2, flatValuesSize2, d_insertIndices2, d_insertValues2, d_insertSizes2, insertIndices2.size());
-
-    // Copy flat values back to host and print them
-    std::vector<int> updatedFlatValues2(fixedSize);
-    checkCuda(cudaMemcpy(updatedFlatValues2.data(), d_flatValues2, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
-    printVector(updatedFlatValues2, "Updated Flattened Values (vec1d)");
-
-//  hyperedge to hyperedge
-    // Check if fixedSize is at least flatValuesSize
-    if (fixedSize < flatValuesSize3) {
-        std::cerr << "Overflow: fixedSize is less than flatValuesSize3" << std::endl;
-        return;
-    }
-
-    CBSTNode* d_nodes3;
-    int* d_indices3;
-    int* d_values3;
-    int* d_flatValues3;
-    int* d_insertIndices3;
-    int* d_insertValues3;
-    int* d_insertSizes3;
-    int* d_partialSolution3;
-
-    // Allocate device memory
-    checkCuda(cudaMalloc(&d_nodes3, n * sizeof(CBSTNode)));
-    checkCuda(cudaMalloc(&d_indices3, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_values3, n * sizeof(int)));
-
-    // Allocate fixed memory for d_flatValues
-    checkCuda(cudaMalloc(&d_flatValues3, fixedSize * sizeof(int)));
-
-    // Copy first portion from flatValues
-    checkCuda(cudaMemcpy(d_flatValues3, flatValues3, flatValuesSize3 * sizeof(int), cudaMemcpyHostToDevice));
-
-    // Initialize remaining portion to zero
-    checkCuda(cudaMemset(d_flatValues3 + flatValuesSize3, 0, (fixedSize - flatValuesSize3) * sizeof(int)));
-
-    checkCuda(cudaMalloc(&d_insertIndices3, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_insertValues3, n * 3 * sizeof(int)));  // Allocate max size for values
-    checkCuda(cudaMalloc(&d_insertSizes3, n * sizeof(int)));
-    checkCuda(cudaMalloc(&d_partialSolution3, 3 * n * sizeof(int)));
-
-    checkCuda(cudaMemcpy(d_indices3, h_indices3, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_values3, h_values3, n * sizeof(int), cudaMemcpyHostToDevice));
-
-    // Copy dummy insert indices and values for initial tree construction
-    checkCuda(cudaMemcpy(d_insertIndices3, h_indices3, n * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues3, h_values3, n * sizeof(int), cudaMemcpyHostToDevice));
-
-    blockSize = 256;
-    numBlocks = (n + blockSize - 1) / blockSize;
-
-    // Step 1: Build the empty binary tree
-    buildEmptyBinaryTree<<<numBlocks, blockSize>>>(d_nodes3, n);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Step 2: Store items into internal nodes
-    storeItemsIntoNodes<<<numBlocks, blockSize>>>(d_nodes3, d_indices3, d_values3, n, flatValuesSize3);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Step 3: Tree construction complete
-
-    // Print each node from the device
-    std::cout << "Printing the tree from the device:" << std::endl;
-    printEachNode<<<numBlocks, blockSize>>>(d_nodes3, n);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Prepare data for insertion
-    std::vector<std::pair<int, std::vector<int>>> insertVector3 = {{2, {200 }}};
-    std::vector<int> insertIndices3(insertVector3.size());
-    std::vector<int> insertValues3;
-    std::vector<int> insertSizes3(insertVector3.size());
-    std::vector<int> partialSolution3(insertVector3.size() * 3, 0);
-    
-
-    for (size_t i = 0; i < insertVector3.size(); ++i) {
-        insertIndices3[i] = insertVector3[i].first;
-        insertValues3.insert(insertValues3.end(), insertVector3[i].second.begin(), insertVector3[i].second.end());
-        if (i == 0)
-            insertSizes3[i] = insertVector3[i].second.size();
-        else 
-            insertSizes3[i] = insertSizes3[i-1] + insertVector3[i].second.size();
-    }
-
-    checkCuda(cudaMemcpy(d_insertIndices3, insertIndices3.data(), insertIndices3.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertValues3, insertValues3.data(), insertValues3.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_insertSizes3, insertSizes3.data(), insertSizes3.size() * sizeof(int), cudaMemcpyHostToDevice));
-    checkCuda(cudaMemcpy(d_partialSolution3, partialSolution3.data(), insertSizes3.size() * sizeof(int) * 3, cudaMemcpyHostToDevice));
-
-    // Insert nodes into the Complete Binary Search Tree
-    insertNode<<<(insertIndices3.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes3, d_flatValues3, d_insertIndices3, d_insertValues3, d_insertSizes3, insertIndices3.size(), d_partialSolution3);
-    checkCuda(cudaDeviceSynchronize());
-
-    
-
-    checkCuda(cudaMemcpy(partialSolution3.data(), d_partialSolution3, insertSizes3.size() * sizeof(int) * 3, cudaMemcpyDeviceToHost));
-    printVector(partialSolution3, "Partial solution");
-    
-
-    K = insertIndices3.size();
-    checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
-
-    computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_tmp, K);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Perform inclusive scan over d_tmp using Thrust
-    tmp_ptr = thrust::device_pointer_cast(d_tmp);
-    thrust::inclusive_scan(tmp_ptr, tmp_ptr + K, tmp_ptr);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Update partialSolution3[3*k+2] = tmp[k];
-    updatePartialSolution<<<(K + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_tmp, K);
-    checkCuda(cudaDeviceSynchronize());
-
-    // Copy partialSolution3 back to host and print
-    checkCuda(cudaMemcpy(partialSolution3.data(), d_partialSolution3, K * 3 * sizeof(int), cudaMemcpyDeviceToHost));
-    printVector(partialSolution3, "Cumulative Partial solution for nodes3");
-
-    printf("Space available from: %d \n", flatValuesSize3);
-
-    allocateSpace<<<(insertIndices3.size() + blockSize - 1) / blockSize, blockSize>>>(d_partialSolution3, d_flatValues3, flatValuesSize3, d_insertIndices3, d_insertValues3, d_insertSizes3, insertIndices3.size());
-
-    // Copy flat values back to host and print them
-    std::vector<int> updatedFlatValues3(fixedSize);
-    checkCuda(cudaMemcpy(updatedFlatValues3.data(), d_flatValues3, fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
-    printVector(updatedFlatValues3, "Updated Flattened Values (vec1d)");
+// (H2H removed: function is now generic and called per-dataset)
 
 
 
@@ -1007,59 +775,20 @@ void constructCompleteBinarySearchTree(int* h_indices, int* h_values, int n, int
     int *d_search;
     checkCuda(cudaMalloc(&d_search, search.size() * sizeof(int)));
     checkCuda(cudaMemcpy(d_search, search.data(), search.size() * sizeof(int), cudaMemcpyHostToDevice ));
-    findContents<<<(search.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_search, search.size(), d_flatValues);
-    checkCuda(cudaDeviceSynchronize());
-    findContents<<<(search.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes2, d_search, search.size(), d_flatValues2);
+    findContents<<<(search.size() + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_search, search.size(), d_flatPayload);
     checkCuda(cudaDeviceSynchronize());
 
-// Storage for partial result
-    int m = 30; // Number of columns
-    std::vector<std::vector<int>> partialResults(n, std::vector<int>(m));
-
-    // Fill partialResults with some values
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < m; ++j) {
-            partialResults[i][j] = i * m + j;
-        }
-    }
-
-    // Step 1: Flatten the 2D vector into a 1D array
-    std::vector<int> flatPartialResults(n * m);
-    for (int i = 0; i < n; ++i) {
-        std::copy(partialResults[i].begin(), partialResults[i].end(), flatPartialResults.begin() + i * m);
-    }
-
-    // Step 2: Allocate memory on the device
-    int* d_partialResults;
-    size_t size = n * m * sizeof(int);
-    cudaMalloc(&d_partialResults, size);
-
-    // Step 3: Copy the flattened data to the device
-    cudaMemcpy(d_partialResults, flatPartialResults.data(), size, cudaMemcpyHostToDevice);
-
-    
-
-    updateCount<<<(n + blockSize - 1) / blockSize, blockSize>>>(d_nodes, d_flatValues, d_nodes2, d_flatValues2, d_nodes3, d_flatValues3, n, d_partialResults, fixedSize);
-
-    checkCuda(cudaDeviceSynchronize());
+// (Motif counting demo removed here; can be implemented per-dataset if needed)
 
 
 // Free device memory
-    checkCuda(cudaFree(d_insertIndices));
-    checkCuda(cudaFree(d_insertValues));
-    checkCuda(cudaFree(d_insertSizes));
-    checkCuda(cudaFree(d_indices));
-    checkCuda(cudaFree(d_values));
+    checkCuda(cudaFree(d_insertKeys));
+    checkCuda(cudaFree(d_insertPayload));
+    checkCuda(cudaFree(d_insertPrefixSizes));
+    checkCuda(cudaFree(d_keys));
+    checkCuda(cudaFree(d_startOffsets));
     checkCuda(cudaFree(d_nodes));
-    checkCuda(cudaFree(d_flatValues));
-
-    checkCuda(cudaFree(d_insertIndices2));
-    checkCuda(cudaFree(d_insertValues2));
-    checkCuda(cudaFree(d_insertSizes2));
-    checkCuda(cudaFree(d_indices2));
-    checkCuda(cudaFree(d_values2));
-    checkCuda(cudaFree(d_nodes2));
-    checkCuda(cudaFree(d_flatValues2));
+    checkCuda(cudaFree(d_flatPayload));
 }
 
 
@@ -1082,22 +811,40 @@ int main(int argc, char* argv[]) {
     print2DVector(hyperedge2hyperedge);
 
     // Flatten the 2D vectors for GPU processing
-    auto [flatValuesH2V, flatIndicesH2V] = flatten(hyperedgeToVertex, "Hyperedge to Vertex");
-    auto [flatValuesV2H, flatIndicesV2H] = flatten(vertexToHyperedge, "Vertex to Hyperedge");
-    auto [flatValuesH2H, flatIndicesH2H] = flatten(hyperedge2hyperedge, "Hyperedge to Hyperedge");
+    auto [h2vFlatVertexIds, h2vStartOffsets] = flatten(hyperedgeToVertex, "Hyperedge to Vertex");
+    auto [v2hFlatHyperedgeIds, v2hStartOffsets] = flatten(vertexToHyperedge, "Vertex to Hyperedge");
+    auto [h2hFlatAdjacency, h2hStartOffsets] = flatten(hyperedge2hyperedge, "Hyperedge to Hyperedge");
 
     // Prepare data for Complete Binary Search Tree construction
-    auto [h_valuesH2V, h_indicesH2V] = prepareCBSTData(flatIndicesH2V);
-    auto [h_valuesV2H, h_indicesV2H] = prepareCBSTData(flatIndicesV2H);
-    auto [h_valuesH2H, h_indicesH2H] = prepareCBSTData(flatIndicesH2H);
+    auto [cbstH2VStartOffsets, cbstH2VKeys] = prepareCBSTData(h2vStartOffsets);
+    auto [cbstV2HStartOffsets, cbstV2HKeys] = prepareCBSTData(v2hStartOffsets);
+    auto [cbstH2HStartOffsets, cbstH2HKeys] = prepareCBSTData(h2hStartOffsets);
 
-    // Construct Complete Binary Search Trees and perform analysis
-    constructCompleteBinarySearchTree(h_indicesH2V, h_valuesH2V, params.numHyperedges, flatValuesH2V.data(), flatValuesH2V.size(), h_indicesV2H, h_valuesV2H, flatValuesV2H.data(), flatValuesV2H.size(), h_indicesH2H, h_valuesH2H, flatValuesH2H.data(), flatValuesH2H.size());
+    // Construct Complete Binary Search Trees (generic) for each dataset
+    int numVertices = static_cast<int>(vertexToHyperedge.size());
+
+    constructCompleteBinarySearchTree(
+        cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
+        h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()),
+        "H2V"
+    );
+
+    constructCompleteBinarySearchTree(
+        cbstV2HKeys, cbstV2HStartOffsets, numVertices,
+        v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()),
+        "V2H"
+    );
+
+    constructCompleteBinarySearchTree(
+        cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
+        h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()),
+        "H2H"
+    );
 
     // Clean up memory
-    delete[] h_indicesH2V;
-    delete[] h_indicesV2H;
-    delete[] h_indicesH2H;
+    delete[] cbstH2VKeys;
+    delete[] cbstV2HKeys;
+    delete[] cbstH2HKeys;
     
     return 0;
 }
