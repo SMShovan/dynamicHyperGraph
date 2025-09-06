@@ -25,10 +25,13 @@ struct CBSTContext {
     int* d_insertPayload;
     int* d_insertPrefixSizes;
     int* d_relocationPlan;
+    int* d_avail;
+    int* d_subtreeAvail;
     int fixedSize;
     int numRecords;
     int initialPayloadSize;
     const char* datasetName;
+    int alignment;
 };
 
 // Host API for CBST operations (free functions)
@@ -38,7 +41,7 @@ void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
 
 // OO wrapper to manage CBST lifecycle and operations
 struct CBSTOperations {
-    explicit CBSTOperations(const char* datasetName, int payloadCapacity);
+    explicit CBSTOperations(const char* datasetName, int payloadCapacity, int alignment = 4);
     ~CBSTOperations();
     CBSTOperations(const CBSTOperations&) = delete;
     CBSTOperations& operator=(const CBSTOperations&) = delete;

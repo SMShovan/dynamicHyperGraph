@@ -11,6 +11,7 @@ struct HypergraphParams {
     int minVertexId;
     int maxVertexId;
     int payloadCapacity; // capacity for flattened payload buffers
+    int alignment; // padding alignment for payload chunks
 };
 
 // Forward declarations

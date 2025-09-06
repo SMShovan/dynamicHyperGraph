@@ -17,6 +17,9 @@ __global__ void updatePartialSolution(int* partialSolution, int* tmp, int K);
 __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize);
 __global__ void deleteNode(CBSTNode* nodes, int* deleteIndices, int deleteSize);
 __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues);
+// Propagation kernels
+__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail);
+__global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail);
 
 // Local CUDA error checker for this TU
 static inline void checkCuda(cudaError_t result) {
@@ -31,6 +34,11 @@ void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayloa
     ctx.numRecords = numRecords;
     ctx.initialPayloadSize = flatPayloadSize;
     ctx.datasetName = datasetName;
+    // ctx.alignment should be set by the owner (CBSTOperations) before calling
+
+    if (numRecords == 0) {
+        return;
+    }
 
     if (ctx.fixedSize < flatPayloadSize) {
         std::cerr << "Overflow: fixedSize is less than flatPayloadSize" << std::endl;
@@ -52,6 +60,11 @@ void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayloa
     checkCuda(cudaMalloc(&ctx.d_insertPayload, numRecords * 3 * sizeof(int)));
     checkCuda(cudaMalloc(&ctx.d_insertPrefixSizes, numRecords * sizeof(int)));
     checkCuda(cudaMalloc(&ctx.d_relocationPlan, 3 * numRecords * sizeof(int)));
+    // Availability arrays (0/1 per node) and subtree sums (per node)
+    checkCuda(cudaMalloc(&ctx.d_avail, numRecords * sizeof(int)));
+    checkCuda(cudaMalloc(&ctx.d_subtreeAvail, numRecords * sizeof(int)));
+    checkCuda(cudaMemset(ctx.d_avail, 0, numRecords * sizeof(int)));
+    checkCuda(cudaMemset(ctx.d_subtreeAvail, 0, numRecords * sizeof(int)));
 
     int blockSize = 256;
     int numBlocks = (numRecords + blockSize - 1) / blockSize;
@@ -84,6 +97,7 @@ void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& inse
     int K = static_cast<int>(insertKeys.size());
     int* d_tmp;
     checkCuda(cudaMalloc(&d_tmp, K * sizeof(int)));
+    // Note: currently kernel pads to 4. To support arbitrary alignment, update the kernel to accept ctx.alignment.
     computeNextMultipleOf4<<<(K + blockSize - 1) / blockSize, blockSize>>>(ctx.d_relocationPlan, d_tmp, K);
     checkCuda(cudaDeviceSynchronize());
     thrust::device_ptr<int> tmp_ptr = thrust::device_pointer_cast(d_tmp);
@@ -100,6 +114,12 @@ void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& inse
     allocateSpace<<<numBlocks, blockSize>>>(ctx.d_relocationPlan, ctx.d_flatPayload, ctx.initialPayloadSize, ctx.d_insertKeys, ctx.d_insertPayload, ctx.d_insertPrefixSizes, K);
     checkCuda(cudaDeviceSynchronize());
 
+    // Advance appended-space cursor so next batch appends after this one
+    if (K > 0) {
+        int totalAppended = relocationPlanHostOut[3 * (K - 1) + 2];
+        ctx.initialPayloadSize += totalAppended;
+    }
+
     std::vector<int> updatedFlat(ctx.fixedSize);
     checkCuda(cudaMemcpy(updatedFlat.data(), ctx.d_flatPayload, ctx.fixedSize * sizeof(int), cudaMemcpyDeviceToHost));
     printVector(updatedFlat, "Updated Flattened Values (vec1d)");
@@ -115,16 +135,51 @@ void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx) {
 
     int blockSize = 256;
     int numBlocks = (static_cast<int>(deleteKeys.size()) + blockSize - 1) / blockSize;
+    // Mark node index = -1 (lazy delete)
     deleteNode<<<numBlocks, blockSize>>>(ctx.d_nodes, d_deleteKeys, static_cast<int>(deleteKeys.size()));
     checkCuda(cudaDeviceSynchronize());
+
+    // Mark avail = 1 for deleted nodes
+    markAvail<<<numBlocks, blockSize>>>(ctx.d_nodes, d_deleteKeys, static_cast<int>(deleteKeys.size()), ctx.d_avail);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Bottom-up level-wise reduction
+    // Compute last level start using heap property
+    int lastLevelStart = 1;
+    while (lastLevelStart * 2 <= ctx.numRecords) lastLevelStart <<= 1; // 2^h
+    int levelStart = lastLevelStart - 1; // 0-based index of first node at last full level
+    if (levelStart >= ctx.numRecords) levelStart = (lastLevelStart >> 1) - 1; // adjust if beyond size
+
+    // Initialize subtreeAvail = avail at leaves and beyond
+    // For ranges beyond numRecords, threads will just skip
+    // Propagate from bottom to top
+    int currStart = ctx.numRecords - 1; // last index
+    // First, copy avail to subtreeAvail for all nodes
+    int nodesBlocks = (ctx.numRecords + blockSize - 1) / blockSize;
+    reduceAvailLevel<<<nodesBlocks, blockSize>>>(ctx.numRecords - 1, ctx.numRecords - 1, ctx.numRecords, ctx.d_avail, ctx.d_subtreeAvail);
+    checkCuda(cudaDeviceSynchronize());
+
+    // Now perform level-wise reduction
+    for (int levelEnd = ctx.numRecords - 1; levelStart >= 0; levelStart = (levelStart - 1) / 2) {
+        int start = levelStart;
+        int end = levelEnd;
+        int count = end - start + 1;
+        int blocks = (count + blockSize - 1) / blockSize;
+        reduceAvailLevel<<<blocks, blockSize>>>(start, end, ctx.numRecords, ctx.d_avail, ctx.d_subtreeAvail);
+        checkCuda(cudaDeviceSynchronize());
+        if (levelStart == 0) break;
+        levelEnd = levelStart - 1;
+        levelStart = (levelStart - 1) / 2;
+    }
 
     checkCuda(cudaFree(d_deleteKeys));
 }
 
 // CBSTOperations implementation
-CBSTOperations::CBSTOperations(const char* datasetName, int payloadCapacity) {
+CBSTOperations::CBSTOperations(const char* datasetName, int payloadCapacity, int alignment) {
     ctx_.datasetName = datasetName;
     ctx_.fixedSize = payloadCapacity;
+    ctx_.alignment = alignment;
 }
 
 CBSTOperations::~CBSTOperations() {
@@ -138,8 +193,41 @@ CBSTOperations::~CBSTOperations() {
     if (ctx_.d_flatPayload)      checkCuda(cudaFree(ctx_.d_flatPayload));
 }
 
-CBSTOperations::CBSTOperations(CBSTOperations&& other) noexcept { ctx_ = other.ctx_; constructed_ = other.constructed_; other = CBSTOperations(nullptr, 0); }
-CBSTOperations& CBSTOperations::operator=(CBSTOperations&& other) noexcept { if (this != &other) { this->~CBSTOperations(); ctx_ = other.ctx_; constructed_ = other.constructed_; other = CBSTOperations(nullptr, 0); } return *this; }
+CBSTOperations::CBSTOperations(CBSTOperations&& other) noexcept {
+    ctx_ = other.ctx_;
+    constructed_ = other.constructed_;
+    // Null out other's pointers to avoid double free
+    other.ctx_.d_nodes = nullptr;
+    other.ctx_.d_keys = nullptr;
+    other.ctx_.d_startOffsets = nullptr;
+    other.ctx_.d_flatPayload = nullptr;
+    other.ctx_.d_insertKeys = nullptr;
+    other.ctx_.d_insertPayload = nullptr;
+    other.ctx_.d_insertPrefixSizes = nullptr;
+    other.ctx_.d_relocationPlan = nullptr;
+    other.constructed_ = false;
+}
+
+CBSTOperations& CBSTOperations::operator=(CBSTOperations&& other) noexcept {
+    if (this != &other) {
+        // Free current resources
+        this->~CBSTOperations();
+        // Steal other's resources
+        ctx_ = other.ctx_;
+        constructed_ = other.constructed_;
+        // Null out other's pointers
+        other.ctx_.d_nodes = nullptr;
+        other.ctx_.d_keys = nullptr;
+        other.ctx_.d_startOffsets = nullptr;
+        other.ctx_.d_flatPayload = nullptr;
+        other.ctx_.d_insertKeys = nullptr;
+        other.ctx_.d_insertPayload = nullptr;
+        other.ctx_.d_insertPrefixSizes = nullptr;
+        other.ctx_.d_relocationPlan = nullptr;
+        other.constructed_ = false;
+    }
+    return *this;
+}
 
 void CBSTOperations::construct(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize) {
     constructCBST(keys, startOffsets, numRecords, flatPayload, flatPayloadSize, ctx_.fixedSize, ctx_.datasetName, ctx_);

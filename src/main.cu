@@ -267,6 +267,36 @@ __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize
     }
 }
 
+// Mark avail = 1 for deleted keys
+__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < deleteSize) {
+        int key = deleteKeys[tid];
+        CBSTNode* current = nodes;
+        while (current != nullptr && current->index != key) {
+            if (current->index > key) current = current->left; else current = current->right;
+        }
+        if (current != nullptr) {
+            // current->index matches key; compute its array index by pointer arithmetic
+            // Assuming nodes is a contiguous array
+            int idx = static_cast<int>(current - nodes);
+            avail[idx] = 1;
+        }
+    }
+}
+
+// Reduce avail bottom-up for [levelStart..levelEnd] range
+__global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail) {
+    int g = threadIdx.x + blockIdx.x * blockDim.x;
+    int idx = levelStart + g;
+    if (idx < 0 || idx > levelEnd || idx >= numRecords) return;
+    int left = 2 * idx + 1;
+    int right = 2 * idx + 2;
+    int leftSum = (left < numRecords) ? subtreeAvail[left] : 0;
+    int rightSum = (right < numRecords) ? subtreeAvail[right] : 0;
+    subtreeAvail[idx] = avail[idx] + leftSum + rightSum;
+}
+
 __global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < insertSize) {
@@ -653,7 +683,7 @@ int main(int argc, char* argv[]) {
     int numVertices = static_cast<int>(vertexToHyperedge.size());
 
     {
-        CBSTOperations h2vOps("H2V", params.payloadCapacity);
+        CBSTOperations h2vOps("H2V", params.payloadCapacity, params.alignment);
         h2vOps.construct(cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
                          h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()));
 
@@ -675,14 +705,14 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        CBSTOperations v2hOps("V2H", params.payloadCapacity);
+        CBSTOperations v2hOps("V2H", params.payloadCapacity, params.alignment);
         v2hOps.construct(cbstV2HKeys, cbstV2HStartOffsets, numVertices,
                          v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()));
         v2hOps.findAndPrint(std::vector<int>{1,2,3});
     }
 
     {
-        CBSTOperations h2hOps("H2H", params.payloadCapacity);
+        CBSTOperations h2hOps("H2H", params.payloadCapacity, params.alignment);
         h2hOps.construct(cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
                          h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()));
         h2hOps.findAndPrint(std::vector<int>{1,2,3});
