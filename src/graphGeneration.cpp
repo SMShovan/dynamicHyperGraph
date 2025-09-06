@@ -15,9 +15,9 @@ std::vector<std::vector<int>> hyperedge2vertex(int n, int m, int r1, int r2) {
         int innerSize = rand() % m + 1; // Random inner size from 1 to m
         std::set<int> uniqueVertices; // Use set to ensure uniqueness
         
-        // Generate unique vertex IDs for this hyperedge (0-indexed)
+        // Generate unique vertex IDs for this hyperedge (1-indexed)
         while (uniqueVertices.size() < static_cast<size_t>(innerSize)) {
-            int vertexId = rand() % (r2 - r1 + 1) + r1 - 1; // Convert to 0-indexed
+            int vertexId = rand() % (r2 - r1 + 1) + r1; // Keep 1-based IDs to avoid 0 sentinel
             uniqueVertices.insert(vertexId);
         }
         
@@ -37,13 +37,13 @@ std::vector<std::vector<int>> vertex2hyperedge(const std::vector<std::vector<int
         }
     }
 
-    // Step 2: Initialize vertexToHyperedge with size maxValue + 1 (0-indexed)
+    // Step 2: Initialize vertexToHyperedge with size maxValue + 1 (index 0 unused; 1-based vertex IDs)
     std::vector<std::vector<int>> vertexToHyperedge(maxValue + 1);
 
     // Step 3: Populate vertexToHyperedge with indices from hyperedgeToVertex
     for (size_t rowIndex = 0; rowIndex < hyperedgeToVertex.size(); ++rowIndex) {
         for (int value : hyperedgeToVertex[rowIndex]) {
-            vertexToHyperedge[value].push_back(rowIndex);  // 0-indexed hyperedge IDs
+            vertexToHyperedge[value].push_back(static_cast<int>(rowIndex) + 1);  // store 1-based hyperedge IDs
         }
     }
 

@@ -65,7 +65,7 @@ std::pair<std::vector<std::vector<int>>, std::vector<std::vector<int>>> generate
 std::vector<std::vector<int>> hyperedgeAdjacency(const std::vector<std::vector<int>>& vertexToHyperedge, const std::vector<std::vector<int>>& hyperedgeToVertex) {
     int nHyperedges = hyperedgeToVertex.size();
     
-    // Resultant adjacency matrix for hyperedges (0-indexed)
+    // Resultant adjacency matrix for hyperedges (store 1-based hyperedge IDs)
     std::vector<std::vector<int>> hyperedgeAdjacencyMatrix(nHyperedges);
 
     // Iterate through each hyperedge (0-indexed)
@@ -78,7 +78,8 @@ std::vector<std::vector<int>> hyperedgeAdjacency(const std::vector<std::vector<i
         // For each vertex, find other hyperedges connected to it
         for (int vertex : vertices) {
             for (int otherHyperedge : vertexToHyperedge[vertex]) {
-                if (otherHyperedge != hyperedge) {  // Avoid self-loop (both 0-indexed)
+                // vertexToHyperedge stores 1-based hyperedge IDs; avoid self-loop by comparing to (hyperedge + 1)
+                if (otherHyperedge != hyperedge + 1) {
                     adjacentHyperedges.insert(otherHyperedge); // Ensure no duplicates
                 }
             }
