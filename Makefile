@@ -13,12 +13,13 @@ BUILD_DIR = build
 TARGET = $(BUILD_DIR)/main
 
 # Source files
-CUDA_SOURCES = $(SRC_DIR)/main.cu
+STRUCT_DIR = structure
+CUDA_SOURCES = $(SRC_DIR)/main.cu $(STRUCT_DIR)/operations.cu
 CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp $(UTILS_DIR)/utils.cpp $(UTILS_DIR)/printUtils.cpp
 HEADERS = $(INCLUDE_DIR)/graphGeneration.hpp $(INCLUDE_DIR)/utils.hpp $(INCLUDE_DIR)/printUtils.hpp
 
 # Object files
-CUDA_OBJECTS = $(BUILD_DIR)/main.o
+CUDA_OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/operations.o
 CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o $(BUILD_DIR)/utils.o $(BUILD_DIR)/printUtils.o
 
 # Default target
@@ -30,6 +31,11 @@ $(TARGET): $(CUDA_OBJECTS) $(CPP_OBJECTS)
 
 # Compile CUDA source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS)
+	@mkdir -p $(BUILD_DIR)
+	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+# Compile CUDA source files under structure/
+$(BUILD_DIR)/%.o: $(STRUCT_DIR)/%.cu $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
 	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 

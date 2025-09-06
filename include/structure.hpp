@@ -15,24 +15,26 @@ struct CBSTNode {
     CBSTNode* parent;
 };
 
-// Helper available to both host/device where needed
-__host__ __device__ static inline int nextMultipleOf4(int num) {
-    if (num == 0) return 0;
-    return ((num + 4) / 4) * 4;
-}
+// Device-side context is opaque; host context holds device buffers
+struct CBSTContext {
+    CBSTNode* d_nodes;
+    int* d_keys;
+    int* d_startOffsets;
+    int* d_flatPayload;
+    int* d_insertKeys;
+    int* d_insertPayload;
+    int* d_insertPrefixSizes;
+    int* d_relocationPlan;
+    int fixedSize;
+    int numRecords;
+    int initialPayloadSize;
+    const char* datasetName;
+};
 
-// Function declarations for Complete Binary Search Tree operations
-void constructCompleteBinarySearchTree(
-    int* h_indices, int* h_values, int n, 
-    int* flatValues, int flatValuesSize, 
-    int* h_indices2, int* h_values2, 
-    int* flatValues2, int flatValuesSize2, 
-    int* h_indices3, int* h_values3, 
-    int* flatValues3, int flatValuesSize3
-);
-
-// Helper functions for CBST operations
-void checkCuda(cudaError_t result);
-std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d);
+// Host API for CBST operations
+void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName, CBSTContext& ctx);
+void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
+void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
+void operations(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName);
 
 #endif // STRUCTURE_HPP
