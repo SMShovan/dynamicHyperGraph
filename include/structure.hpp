@@ -36,7 +36,7 @@ struct CBSTContext {
 
 // Host API for CBST operations (free functions)
 void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, int payloadCapacity, const char* datasetName, CBSTContext& ctx);
-void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
+void fillCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
 void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
 
 // OO wrapper to manage CBST lifecycle and operations

@@ -80,7 +80,7 @@ void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayloa
     checkCuda(cudaDeviceSynchronize());
 }
 
-void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx) {
+void fillCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx) {
     if (insertKeys.empty()) return;
     std::vector<int> relocationPlanHost(insertKeys.size() * 3, 0);
 
@@ -235,7 +235,7 @@ void CBSTOperations::construct(int* keys, int* startOffsets, int numRecords, int
 }
 
 void CBSTOperations::insert(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes) {
-    insertCBST(insertKeys, insertPayload, insertPrefixSizes, ctx_);
+    fillCBST(insertKeys, insertPayload, insertPrefixSizes, ctx_);
 }
 
 void CBSTOperations::erase(const std::vector<int>& deleteKeys) {
