@@ -649,26 +649,44 @@ int main(int argc, char* argv[]) {
     auto [cbstV2HStartOffsets, cbstV2HKeys] = prepareCBSTData(v2hStartOffsets);
     auto [cbstH2HStartOffsets, cbstH2HKeys] = prepareCBSTData(h2hStartOffsets);
 
-    // Construct Complete Binary Search Trees (generic) for each dataset
+    // Construct Complete Binary Search Trees (generic) for each dataset using OO wrapper
     int numVertices = static_cast<int>(vertexToHyperedge.size());
 
-    operations(
-        cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
-        h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()),
-        "H2V"
-    );
+    {
+        CBSTOperations h2vOps("H2V", params.payloadCapacity);
+        h2vOps.construct(cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
+                         h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()));
 
-    operations(
-        cbstV2HKeys, cbstV2HStartOffsets, numVertices,
-        v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()),
-        "V2H"
-    );
+        // Demo ops (optional)
+        std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
+        std::vector<int> demoInsertKeys;
+        std::vector<int> demoInsertPayload;
+        std::vector<int> demoInsertPrefixSizes(insertVector.size());
+        demoInsertKeys.reserve(insertVector.size());
+        for (size_t i = 0; i < insertVector.size(); ++i) {
+            demoInsertKeys.push_back(insertVector[i].first);
+            demoInsertPayload.insert(demoInsertPayload.end(), insertVector[i].second.begin(), insertVector[i].second.end());
+            demoInsertPrefixSizes[i] = (i == 0) ? static_cast<int>(insertVector[i].second.size())
+                                                : demoInsertPrefixSizes[i-1] + static_cast<int>(insertVector[i].second.size());
+        }
+        h2vOps.insert(demoInsertKeys, demoInsertPayload, demoInsertPrefixSizes);
+        h2vOps.erase(std::vector<int>{2,4,6});
+        h2vOps.findAndPrint(std::vector<int>{1,2,3});
+    }
 
-    operations(
-        cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
-        h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()),
-        "H2H"
-    );
+    {
+        CBSTOperations v2hOps("V2H", params.payloadCapacity);
+        v2hOps.construct(cbstV2HKeys, cbstV2HStartOffsets, numVertices,
+                         v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()));
+        v2hOps.findAndPrint(std::vector<int>{1,2,3});
+    }
+
+    {
+        CBSTOperations h2hOps("H2H", params.payloadCapacity);
+        h2hOps.construct(cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
+                         h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()));
+        h2hOps.findAndPrint(std::vector<int>{1,2,3});
+    }
 
     // Clean up memory
     delete[] cbstH2VKeys;

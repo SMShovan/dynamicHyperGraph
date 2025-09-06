@@ -26,8 +26,8 @@ static inline void checkCuda(cudaError_t result) {
     }
 }
 
-void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName, CBSTContext& ctx) {
-    ctx.fixedSize = 1024;
+void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, int payloadCapacity, const char* datasetName, CBSTContext& ctx) {
+    ctx.fixedSize = payloadCapacity;
     ctx.numRecords = numRecords;
     ctx.initialPayloadSize = flatPayloadSize;
     ctx.datasetName = datasetName;
@@ -121,45 +121,47 @@ void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx) {
     checkCuda(cudaFree(d_deleteKeys));
 }
 
-void operations(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName) {
-    CBSTContext ctx{};
-    constructCBST(keys, startOffsets, numRecords, flatPayload, flatPayloadSize, datasetName, ctx);
+// CBSTOperations implementation
+CBSTOperations::CBSTOperations(const char* datasetName, int payloadCapacity) {
+    ctx_.datasetName = datasetName;
+    ctx_.fixedSize = payloadCapacity;
+}
 
-    // Demo insertion batch
-    std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
-    std::vector<int> demoInsertKeys;
-    std::vector<int> demoInsertPayload;
-    std::vector<int> demoInsertPrefixSizes(insertVector.size());
-    demoInsertKeys.reserve(insertVector.size());
-    for (size_t i = 0; i < insertVector.size(); ++i) {
-        demoInsertKeys.push_back(insertVector[i].first);
-        demoInsertPayload.insert(demoInsertPayload.end(), insertVector[i].second.begin(), insertVector[i].second.end());
-        demoInsertPrefixSizes[i] = (i == 0) ? static_cast<int>(insertVector[i].second.size())
-                                            : demoInsertPrefixSizes[i-1] + static_cast<int>(insertVector[i].second.size());
-    }
-    insertCBST(demoInsertKeys, demoInsertPayload, demoInsertPrefixSizes, ctx);
+CBSTOperations::~CBSTOperations() {
+    if (ctx_.d_insertKeys)       checkCuda(cudaFree(ctx_.d_insertKeys));
+    if (ctx_.d_insertPayload)    checkCuda(cudaFree(ctx_.d_insertPayload));
+    if (ctx_.d_insertPrefixSizes)checkCuda(cudaFree(ctx_.d_insertPrefixSizes));
+    if (ctx_.d_relocationPlan)   checkCuda(cudaFree(ctx_.d_relocationPlan));
+    if (ctx_.d_keys)             checkCuda(cudaFree(ctx_.d_keys));
+    if (ctx_.d_startOffsets)     checkCuda(cudaFree(ctx_.d_startOffsets));
+    if (ctx_.d_nodes)            checkCuda(cudaFree(ctx_.d_nodes));
+    if (ctx_.d_flatPayload)      checkCuda(cudaFree(ctx_.d_flatPayload));
+}
 
-    // Demo deletion batch
-    std::vector<int> demoDeleteKeys = {2, 4, 6};
-    deleteCBST(demoDeleteKeys, ctx);
+CBSTOperations::CBSTOperations(CBSTOperations&& other) noexcept { ctx_ = other.ctx_; constructed_ = other.constructed_; other = CBSTOperations(nullptr, 0); }
+CBSTOperations& CBSTOperations::operator=(CBSTOperations&& other) noexcept { if (this != &other) { this->~CBSTOperations(); ctx_ = other.ctx_; constructed_ = other.constructed_; other = CBSTOperations(nullptr, 0); } return *this; }
 
-    // Demo: simple find
-    std::vector<int> search = {1,2,3};
+void CBSTOperations::construct(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize) {
+    constructCBST(keys, startOffsets, numRecords, flatPayload, flatPayloadSize, ctx_.fixedSize, ctx_.datasetName, ctx_);
+    constructed_ = true;
+}
+
+void CBSTOperations::insert(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes) {
+    insertCBST(insertKeys, insertPayload, insertPrefixSizes, ctx_);
+}
+
+void CBSTOperations::erase(const std::vector<int>& deleteKeys) {
+    deleteCBST(deleteKeys, ctx_);
+}
+
+void CBSTOperations::findAndPrint(const std::vector<int>& ids) const {
+    if (ids.empty()) return;
     int *d_search;
-    checkCuda(cudaMalloc(&d_search, search.size() * sizeof(int)));
-    checkCuda(cudaMemcpy(d_search, search.data(), search.size() * sizeof(int), cudaMemcpyHostToDevice ));
-    findContents<<<(search.size() + 256 - 1) / 256, 256>>>(ctx.d_nodes, d_search, search.size(), ctx.d_flatPayload);
+    checkCuda(cudaMalloc(&d_search, ids.size() * sizeof(int)));
+    checkCuda(cudaMemcpy(d_search, ids.data(), ids.size() * sizeof(int), cudaMemcpyHostToDevice));
+    findContents<<<(ids.size() + 256 - 1) / 256, 256>>>(ctx_.d_nodes, d_search, ids.size(), ctx_.d_flatPayload);
     checkCuda(cudaDeviceSynchronize());
-
-    // Free context buffers
-    checkCuda(cudaFree(ctx.d_insertKeys));
-    checkCuda(cudaFree(ctx.d_insertPayload));
-    checkCuda(cudaFree(ctx.d_insertPrefixSizes));
-    checkCuda(cudaFree(ctx.d_relocationPlan));
-    checkCuda(cudaFree(ctx.d_keys));
-    checkCuda(cudaFree(ctx.d_startOffsets));
-    checkCuda(cudaFree(ctx.d_nodes));
-    checkCuda(cudaFree(ctx.d_flatPayload));
+    checkCuda(cudaFree(d_search));
 }
 
 

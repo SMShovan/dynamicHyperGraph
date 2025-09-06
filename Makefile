@@ -49,11 +49,11 @@ $(BUILD_DIR)/%.o: $(UTILS_DIR)/%.cpp $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
-# Run the program with default parameters
+# Run the program with default parameters (includes payload capacity)
 run: $(TARGET)
-	$(TARGET) 8 5 1 100
+	$(TARGET) 8 5 1 100 4096
 
-# Run with custom parameters (usage: make run-custom ARGS="10 3 1 50")
+# Run with custom parameters (usage: make run-custom ARGS="10 3 1 50 8192")
 run-custom: $(TARGET)
 	$(TARGET) $(ARGS)
 
@@ -72,17 +72,17 @@ install:
 help:
 	@echo "Available targets:"
 	@echo "  all         - Build the project (default)"
-	@echo "  run         - Build and run with default parameters (8 5 1 100)"
-	@echo "  run-custom  - Run with custom parameters (make run-custom ARGS=\"10 3 1 50\")"
+	@echo "  run         - Build and run with default parameters (8 5 1 100 4096)"
+	@echo "  run-custom  - Run with custom parameters (make run-custom ARGS=\"10 3 1 50 8192\")"
 	@echo "  clean       - Remove build artifacts"
 	@echo "  rebuild     - Clean and rebuild"
 	@echo "  install     - Show installation instructions"
 	@echo "  help        - Show this help message"
 	@echo ""
 	@echo "Usage examples:"
-	@echo "  make run                    # Run with default: 8 hyperedges, 5 max vertices, IDs 1-100"
-	@echo "  make run-custom ARGS=\"10 3 1 50\"  # Run with: 10 hyperedges, 3 max vertices, IDs 1-50"
-	@echo "  ./build/main 20 4 1 200    # Direct execution with custom parameters"
+	@echo "  make run                    # Run with default: 8 hyperedges, 5 max vertices, IDs 1-100, capacity 4096"
+	@echo "  make run-custom ARGS=\"10 3 1 50 8192\"  # Run with: 10 hyperedges, 3 max vertices, IDs 1-50, capacity 8192"
+	@echo "  ./build/main 20 4 1 200 16384    # Direct execution with custom capacity"
 
 # Phony targets
 .PHONY: all run run-custom clean rebuild install help

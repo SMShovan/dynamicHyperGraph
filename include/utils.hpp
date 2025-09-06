@@ -10,6 +10,7 @@ struct HypergraphParams {
     int maxVerticesPerHyperedge;
     int minVertexId;
     int maxVertexId;
+    int payloadCapacity; // capacity for flattened payload buffers
 };
 
 // Forward declarations

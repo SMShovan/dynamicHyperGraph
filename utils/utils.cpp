@@ -8,9 +8,9 @@
 // Function to parse and validate command line arguments
 bool parseCommandLineArgs(int argc, char* argv[], HypergraphParams& params) {
     // Check argument count
-    if (argc != 5) {
-        std::cerr << "Usage: " << argv[0] << " <num_hyperedges> <max_vertices_per_hyperedge> <min_vertex_id> <max_vertex_id>" << std::endl;
-        std::cerr << "Example: " << argv[0] << " 8 5 1 100" << std::endl;
+    if (argc != 6) {
+        std::cerr << "Usage: " << argv[0] << " <num_hyperedges> <max_vertices_per_hyperedge> <min_vertex_id> <max_vertex_id> <payload_capacity>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 8 5 1 100 4096" << std::endl;
         return false;
     }
     
@@ -19,10 +19,11 @@ bool parseCommandLineArgs(int argc, char* argv[], HypergraphParams& params) {
     params.maxVerticesPerHyperedge = std::atoi(argv[2]);
     params.minVertexId = std::atoi(argv[3]);
     params.maxVertexId = std::atoi(argv[4]);
+    params.payloadCapacity = std::atoi(argv[5]);
     
     // Validate arguments
     if (params.numHyperedges <= 0 || params.maxVerticesPerHyperedge <= 0 || 
-        params.minVertexId <= 0 || params.maxVertexId <= 0) {
+        params.minVertexId <= 0 || params.maxVertexId <= 0 || params.payloadCapacity <= 0) {
         std::cerr << "Error: All arguments must be positive integers" << std::endl;
         return false;
     }

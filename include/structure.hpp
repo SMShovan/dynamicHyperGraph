@@ -31,10 +31,28 @@ struct CBSTContext {
     const char* datasetName;
 };
 
-// Host API for CBST operations
-void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName, CBSTContext& ctx);
+// Host API for CBST operations (free functions)
+void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, int payloadCapacity, const char* datasetName, CBSTContext& ctx);
 void insertCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
 void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
-void operations(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, const char* datasetName);
+
+// OO wrapper to manage CBST lifecycle and operations
+struct CBSTOperations {
+    explicit CBSTOperations(const char* datasetName, int payloadCapacity);
+    ~CBSTOperations();
+    CBSTOperations(const CBSTOperations&) = delete;
+    CBSTOperations& operator=(const CBSTOperations&) = delete;
+    CBSTOperations(CBSTOperations&& other) noexcept;
+    CBSTOperations& operator=(CBSTOperations&& other) noexcept;
+
+    void construct(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize);
+    void insert(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes);
+    void erase(const std::vector<int>& deleteKeys);
+    void findAndPrint(const std::vector<int>& ids) const;
+
+  private:
+    CBSTContext ctx_{};
+    bool constructed_ = false;
+};
 
 #endif // STRUCTURE_HPP
