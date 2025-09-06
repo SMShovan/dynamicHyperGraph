@@ -21,6 +21,14 @@ __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize
 // Propagation kernels
 __global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail);
 __global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail);
+// Utility: dump node index and value to plain arrays
+__global__ void dumpNodeIndexValue(CBSTNode* nodes, int n, int* outIndex, int* outValue) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < n) {
+        outIndex[tid] = nodes[tid].index;
+        outValue[tid] = nodes[tid].value;
+    }
+}
 // New kernel: place i-th insert into i-th deleted node
 __global__ void insertIntoDeletedKth(CBSTNode* nodes,
                                      int* flatValues,
@@ -30,6 +38,7 @@ __global__ void insertIntoDeletedKth(CBSTNode* nodes,
                                      int* newKeys,
                                      int* newPayload,
                                      int* newPrefixSizes,
+                                     int* relocationPlan,
                                      int K) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= K) return;
@@ -57,11 +66,23 @@ __global__ void insertIntoDeletedKth(CBSTNode* nodes,
     int end = newPrefixSizes[tid];
     int len = end - start;
     int base = node->value;
-    // write payload (assumption: len fits)
-    for (int i = 0; i < len; ++i) {
-        flatValues[base + i] = newPayload[start + i];
+    int capacity = node->length - 1; // leave space for INT_MIN
+    if (len <= capacity) {
+        // write fully in-place
+        for (int i = 0; i < len; ++i) {
+            flatValues[base + i] = newPayload[start + i];
+        }
+        flatValues[base + len] = INT_MIN;
+    } else {
+        // write up to capacity, schedule relocation for the remainder
+        for (int i = 0; i < capacity; ++i) {
+            flatValues[base + i] = newPayload[start + i];
+        }
+        int idx3 = tid * 3;
+        relocationPlan[idx3] = base + capacity;        // location to place negative back-pointer
+        relocationPlan[idx3 + 1] = capacity;           // start offset in this payload
+        relocationPlan[idx3 + 2] = len - capacity;     // remaining length to append
     }
-    flatValues[base + len] = INT_MIN;
     // mark node re-used with new key and clear availability
     node->index = key;
     avail[idx] = 0;
@@ -230,12 +251,19 @@ void insertCBST(const std::vector<int>& newKeys,
     checkCuda(cudaMemcpy(ctx.d_insertKeys, newKeys.data(), newKeys.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(ctx.d_insertPayload, newPayload.data(), newPayload.size() * sizeof(int), cudaMemcpyHostToDevice));
     checkCuda(cudaMemcpy(ctx.d_insertPrefixSizes, newPrefixSizes.data(), newPrefixSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
-    // Safety: ensure enough deletions exist (optional host-side check)
-    // Launch K-thread kernel to place i-th insert into i-th deleted slot
+    // zero relocation plan
+    std::vector<int> zeroReloc(newKeys.size() * 3, 0);
+    checkCuda(cudaMemcpy(ctx.d_relocationPlan, zeroReloc.data(), zeroReloc.size() * sizeof(int), cudaMemcpyHostToDevice));
+    // Determine number of deleted nodes available (root's subtreeAvail)
+    int deletedCountHost = 0;
+    checkCuda(cudaMemcpy(&deletedCountHost, ctx.d_subtreeAvail, sizeof(int), cudaMemcpyDeviceToHost));
+    // Launch kernel for reuse up to min(K, deletedCount)
     int K = static_cast<int>(newKeys.size());
+    int reuseK = (deletedCountHost < K) ? deletedCountHost : K;
     int blockSize = 256;
-    int numBlocks = (K + blockSize - 1) / blockSize;
-    insertIntoDeletedKth<<<numBlocks, blockSize>>>(ctx.d_nodes,
+    int numBlocksReuse = (reuseK + blockSize - 1) / blockSize;
+    if (reuseK > 0) {
+        insertIntoDeletedKth<<<numBlocksReuse, blockSize>>>(ctx.d_nodes,
                                                    ctx.d_flatPayload,
                                                    ctx.d_subtreeAvail,
                                                    ctx.d_avail,
@@ -243,8 +271,137 @@ void insertCBST(const std::vector<int>& newKeys,
                                                    ctx.d_insertKeys,
                                                    ctx.d_insertPayload,
                                                    ctx.d_insertPrefixSizes,
-                                                   K);
-    checkCuda(cudaDeviceSynchronize());
+                                                   ctx.d_relocationPlan,
+                                                   reuseK);
+        checkCuda(cudaDeviceSynchronize());
+    }
+    // Handle any overflows via relocation plan (reuse fillCBST pipeline)
+    if (reuseK > 0) {
+        int* d_tmp;
+        checkCuda(cudaMalloc(&d_tmp, reuseK * sizeof(int)));
+        computeNextMultipleOf4<<<(reuseK + blockSize - 1) / blockSize, blockSize>>>(ctx.d_relocationPlan, d_tmp, reuseK);
+        checkCuda(cudaDeviceSynchronize());
+        thrust::device_ptr<int> tmp_ptr = thrust::device_pointer_cast(d_tmp);
+        thrust::inclusive_scan(tmp_ptr, tmp_ptr + reuseK, tmp_ptr);
+        checkCuda(cudaDeviceSynchronize());
+        updatePartialSolution<<<(reuseK + blockSize - 1) / blockSize, blockSize>>>(ctx.d_relocationPlan, d_tmp, reuseK);
+        checkCuda(cudaDeviceSynchronize());
+        // Read relocation summary to bump tail
+        std::vector<int> relocationPlanHostOut(reuseK * 3);
+        checkCuda(cudaMemcpy(relocationPlanHostOut.data(), ctx.d_relocationPlan, reuseK * 3 * sizeof(int), cudaMemcpyDeviceToHost));
+        allocateSpace<<<numBlocksReuse, blockSize>>>(ctx.d_relocationPlan, ctx.d_flatPayload, ctx.initialPayloadSize, ctx.d_insertKeys, ctx.d_insertPayload, ctx.d_insertPrefixSizes, reuseK);
+        checkCuda(cudaDeviceSynchronize());
+        if (reuseK > 0) {
+            int totalAppended = relocationPlanHostOut[3 * (reuseK - 1) + 2];
+            ctx.initialPayloadSize += totalAppended;
+        }
+        checkCuda(cudaFree(d_tmp));
+    }
+
+    // Surplus inserts beyond deleted slots: append at tail, then reconstruct
+    int surplus = K - reuseK;
+    if (surplus > 0) {
+        // Helper for alignment
+        auto nextMultiple = [](int num, int a) {
+            if (num <= 0) return 0;
+            int q = (num + a - 1) / a;
+            return q * a;
+        };
+        std::vector<int> appendedOffsets;
+        appendedOffsets.reserve(surplus);
+        int cursor = ctx.initialPayloadSize;
+        for (int i = 0; i < surplus; ++i) {
+            int globalIdx = reuseK + i;
+            int start = (globalIdx == 0) ? 0 : newPrefixSizes[globalIdx - 1];
+            int end = newPrefixSizes[globalIdx];
+            int len = end - start;
+            int aligned = nextMultiple(len, ctx.alignment);
+            int base = cursor;
+            appendedOffsets.push_back(base);
+            // copy payload
+            if (len > 0) {
+                checkCuda(cudaMemcpy(ctx.d_flatPayload + base, newPayload.data() + start, len * sizeof(int), cudaMemcpyHostToDevice));
+            }
+            int sentinel = INT_MIN;
+            checkCuda(cudaMemcpy(ctx.d_flatPayload + base + aligned, &sentinel, sizeof(int), cudaMemcpyHostToDevice));
+            cursor += aligned + 1; // include sentinel slot
+        }
+        ctx.initialPayloadSize = cursor;
+
+        // Reconstruct CBST with N' = N + surplus
+        int oldN = ctx.numRecords;
+        int newN = oldN + surplus;
+
+        // Dump existing (index,value) from device
+        int *d_idx, *d_val;
+        checkCuda(cudaMalloc(&d_idx, oldN * sizeof(int)));
+        checkCuda(cudaMalloc(&d_val, oldN * sizeof(int)));
+        int blocksDump = (oldN + blockSize - 1) / blockSize;
+        dumpNodeIndexValue<<<blocksDump, blockSize>>>(ctx.d_nodes, oldN, d_idx, d_val);
+        checkCuda(cudaDeviceSynchronize());
+        std::vector<int> h_idx(oldN), h_val(oldN);
+        checkCuda(cudaMemcpy(h_idx.data(), d_idx, oldN * sizeof(int), cudaMemcpyDeviceToHost));
+        checkCuda(cudaMemcpy(h_val.data(), d_val, oldN * sizeof(int), cudaMemcpyDeviceToHost));
+        checkCuda(cudaFree(d_idx));
+        checkCuda(cudaFree(d_val));
+        // Pair and sort by index ascending
+        std::vector<std::pair<int,int>> pairs;
+        pairs.reserve(oldN);
+        for (int i = 0; i < oldN; ++i) {
+            if (h_idx[i] > 0) pairs.emplace_back(h_idx[i], h_val[i]);
+        }
+        std::sort(pairs.begin(), pairs.end(), [](const std::pair<int,int>& a, const std::pair<int,int>& b){ return a.first < b.first; });
+
+        // Build new host arrays
+        std::vector<int> h_newKeys(newN);
+        std::vector<int> h_newStarts(newN);
+        for (int i = 0; i < newN; ++i) h_newKeys[i] = i + 1;
+        // existing
+        for (int i = 0; i < oldN && i < static_cast<int>(pairs.size()); ++i) {
+            h_newStarts[i] = pairs[i].second;
+        }
+        // appended
+        for (int i = 0; i < surplus; ++i) {
+            h_newStarts[oldN + i] = appendedOffsets[i];
+        }
+
+        // Rebuild nodes and key/start arrays (without touching flat payload)
+        // Free old arrays
+        if (ctx.d_keys) checkCuda(cudaFree(ctx.d_keys));
+        if (ctx.d_startOffsets) checkCuda(cudaFree(ctx.d_startOffsets));
+        if (ctx.d_nodes) checkCuda(cudaFree(ctx.d_nodes));
+        if (ctx.d_avail) checkCuda(cudaFree(ctx.d_avail));
+        if (ctx.d_subtreeAvail) checkCuda(cudaFree(ctx.d_subtreeAvail));
+        // Resize insert buffers as well
+        if (ctx.d_insertKeys) checkCuda(cudaFree(ctx.d_insertKeys));
+        if (ctx.d_insertPayload) checkCuda(cudaFree(ctx.d_insertPayload));
+        if (ctx.d_insertPrefixSizes) checkCuda(cudaFree(ctx.d_insertPrefixSizes));
+        if (ctx.d_relocationPlan) checkCuda(cudaFree(ctx.d_relocationPlan));
+
+        ctx.numRecords = newN;
+        checkCuda(cudaMalloc(&ctx.d_nodes, newN * sizeof(CBSTNode)));
+        checkCuda(cudaMalloc(&ctx.d_keys, newN * sizeof(int)));
+        checkCuda(cudaMalloc(&ctx.d_startOffsets, newN * sizeof(int)));
+        checkCuda(cudaMemcpy(ctx.d_keys, h_newKeys.data(), newN * sizeof(int), cudaMemcpyHostToDevice));
+        checkCuda(cudaMemcpy(ctx.d_startOffsets, h_newStarts.data(), newN * sizeof(int), cudaMemcpyHostToDevice));
+
+        checkCuda(cudaMalloc(&ctx.d_avail, newN * sizeof(int)));
+        checkCuda(cudaMalloc(&ctx.d_subtreeAvail, newN * sizeof(int)));
+        checkCuda(cudaMemset(ctx.d_avail, 0, newN * sizeof(int)));
+        checkCuda(cudaMemset(ctx.d_subtreeAvail, 0, newN * sizeof(int)));
+
+        // Recreate insert buffers according to newN
+        checkCuda(cudaMalloc(&ctx.d_insertKeys, newN * sizeof(int)));
+        checkCuda(cudaMalloc(&ctx.d_insertPayload, newN * 3 * sizeof(int)));
+        checkCuda(cudaMalloc(&ctx.d_insertPrefixSizes, newN * sizeof(int)));
+        checkCuda(cudaMalloc(&ctx.d_relocationPlan, newN * 3 * sizeof(int)));
+
+        int blocksBuild = (newN + blockSize - 1) / blockSize;
+        buildEmptyBinaryTree<<<blocksBuild, blockSize>>>(ctx.d_nodes, newN);
+        checkCuda(cudaDeviceSynchronize());
+        storeItemsIntoNodes<<<blocksBuild, blockSize>>>(ctx.d_nodes, ctx.d_keys, ctx.d_startOffsets, newN, ctx.initialPayloadSize);
+        checkCuda(cudaDeviceSynchronize());
+    }
     // Recompute subtreeAvail bottom-up to reflect consumed deletions
     int blockNodes = (ctx.numRecords + blockSize - 1) / blockSize;
     reduceAvailLevel<<<blockNodes, blockSize>>>(ctx.numRecords - 1, ctx.numRecords - 1, ctx.numRecords, ctx.d_avail, ctx.d_subtreeAvail);
