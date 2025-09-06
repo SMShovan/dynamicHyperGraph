@@ -3,6 +3,7 @@
 #include "../include/printUtils.hpp"
 #include <iostream>
 #include <cstdlib>
+#include <climits>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
@@ -20,6 +21,51 @@ __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize
 // Propagation kernels
 __global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail);
 __global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail);
+// New kernel: place i-th insert into i-th deleted node
+__global__ void insertIntoDeletedKth(CBSTNode* nodes,
+                                     int* flatValues,
+                                     int* subtreeAvail,
+                                     int* avail,
+                                     int numRecords,
+                                     int* newKeys,
+                                     int* newPayload,
+                                     int* newPrefixSizes,
+                                     int K) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= K) return;
+    int k = tid + 1; // 1-based order statistic
+    int idx = 0;
+    while (idx < numRecords) {
+        int left = 2 * idx + 1;
+        int right = 2 * idx + 2;
+        int leftCount = (left < numRecords) ? subtreeAvail[left] : 0;
+        int self = avail[idx];
+        if (k <= leftCount) {
+            idx = left;
+            continue;
+        }
+        if (self == 1 && k == leftCount + 1) {
+            break; // found deleted node at idx
+        }
+        k -= leftCount + self;
+        idx = right;
+    }
+    // idx points to the target deleted node
+    CBSTNode* node = &nodes[idx];
+    int key = newKeys[tid];
+    int start = (tid == 0) ? 0 : newPrefixSizes[tid - 1];
+    int end = newPrefixSizes[tid];
+    int len = end - start;
+    int base = node->value;
+    // write payload (assumption: len fits)
+    for (int i = 0; i < len; ++i) {
+        flatValues[base + i] = newPayload[start + i];
+    }
+    flatValues[base + len] = INT_MIN;
+    // mark node re-used with new key and clear availability
+    node->index = key;
+    avail[idx] = 0;
+}
 
 // Local CUDA error checker for this TU
 static inline void checkCuda(cudaError_t result) {
@@ -173,6 +219,51 @@ void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx) {
     }
 
     checkCuda(cudaFree(d_deleteKeys));
+}
+
+void insertCBST(const std::vector<int>& newKeys,
+                const std::vector<int>& newPayload,
+                const std::vector<int>& newPrefixSizes,
+                CBSTContext& ctx) {
+    if (newKeys.empty()) return;
+    // Copy inputs to device (reuse insert buffers)
+    checkCuda(cudaMemcpy(ctx.d_insertKeys, newKeys.data(), newKeys.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(ctx.d_insertPayload, newPayload.data(), newPayload.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(ctx.d_insertPrefixSizes, newPrefixSizes.data(), newPrefixSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
+    // Safety: ensure enough deletions exist (optional host-side check)
+    // Launch K-thread kernel to place i-th insert into i-th deleted slot
+    int K = static_cast<int>(newKeys.size());
+    int blockSize = 256;
+    int numBlocks = (K + blockSize - 1) / blockSize;
+    insertIntoDeletedKth<<<numBlocks, blockSize>>>(ctx.d_nodes,
+                                                   ctx.d_flatPayload,
+                                                   ctx.d_subtreeAvail,
+                                                   ctx.d_avail,
+                                                   ctx.numRecords,
+                                                   ctx.d_insertKeys,
+                                                   ctx.d_insertPayload,
+                                                   ctx.d_insertPrefixSizes,
+                                                   K);
+    checkCuda(cudaDeviceSynchronize());
+    // Recompute subtreeAvail bottom-up to reflect consumed deletions
+    int blockNodes = (ctx.numRecords + blockSize - 1) / blockSize;
+    reduceAvailLevel<<<blockNodes, blockSize>>>(ctx.numRecords - 1, ctx.numRecords - 1, ctx.numRecords, ctx.d_avail, ctx.d_subtreeAvail);
+    checkCuda(cudaDeviceSynchronize());
+    int lastLevelStart = 1;
+    while (lastLevelStart * 2 <= ctx.numRecords) lastLevelStart <<= 1;
+    int levelStart = lastLevelStart - 1;
+    if (levelStart >= ctx.numRecords) levelStart = (lastLevelStart >> 1) - 1;
+    for (int levelEnd = ctx.numRecords - 1; levelStart >= 0; levelStart = (levelStart - 1) / 2) {
+        int start = levelStart;
+        int end = levelEnd;
+        int count = end - start + 1;
+        int blocks = (count + blockSize - 1) / blockSize;
+        reduceAvailLevel<<<blocks, blockSize>>>(start, end, ctx.numRecords, ctx.d_avail, ctx.d_subtreeAvail);
+        checkCuda(cudaDeviceSynchronize());
+        if (levelStart == 0) break;
+        levelEnd = levelStart - 1;
+        levelStart = (levelStart - 1) / 2;
+    }
 }
 
 // CBSTOperations implementation
