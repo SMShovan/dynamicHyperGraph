@@ -14,12 +14,19 @@ TARGET = $(BUILD_DIR)/main
 
 # Source files
 STRUCT_DIR = structure
-CUDA_SOURCES = $(SRC_DIR)/main.cu $(STRUCT_DIR)/operations.cu
+KERNEL_DIR = kernel
+CUDA_SOURCES = $(SRC_DIR)/main.cu $(STRUCT_DIR)/operations.cu \
+               $(KERNEL_DIR)/insert_reuse.cu $(KERNEL_DIR)/unfill.cu \
+               $(KERNEL_DIR)/payload.cu $(KERNEL_DIR)/build_tree.cu \
+               $(KERNEL_DIR)/delete_avail.cu $(KERNEL_DIR)/find.cu
 CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp $(UTILS_DIR)/utils.cpp $(UTILS_DIR)/printUtils.cpp
 HEADERS = $(INCLUDE_DIR)/graphGeneration.hpp $(INCLUDE_DIR)/utils.hpp $(INCLUDE_DIR)/printUtils.hpp
 
 # Object files
-CUDA_OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/operations.o
+CUDA_OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/operations.o \
+               $(BUILD_DIR)/insert_reuse.o $(BUILD_DIR)/unfill.o \
+               $(BUILD_DIR)/payload.o $(BUILD_DIR)/build_tree.o \
+               $(BUILD_DIR)/delete_avail.o $(BUILD_DIR)/find.o
 CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o $(BUILD_DIR)/utils.o $(BUILD_DIR)/printUtils.o
 
 # Default target
@@ -32,12 +39,17 @@ $(TARGET): $(CUDA_OBJECTS) $(CPP_OBJECTS)
 # Compile CUDA source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
-	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -Ikernel -c $< -o $@
 
 # Compile CUDA source files under structure/
 $(BUILD_DIR)/%.o: $(STRUCT_DIR)/%.cu $(HEADERS)
 	@mkdir -p $(BUILD_DIR)
-	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -Ikernel -c $< -o $@
+
+# Compile CUDA source files under kernel/
+$(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cu $(HEADERS)
+	@mkdir -p $(BUILD_DIR)
+	$(NVCC) $(NVCC_FLAGS) -I$(INCLUDE_DIR) -Ikernel -c $< -o $@
 
 # Compile C++ source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS)

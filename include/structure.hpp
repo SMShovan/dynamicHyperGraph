@@ -39,6 +39,7 @@ void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayloa
 void fillCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
 void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
 void insertCBST(const std::vector<int>& newKeys, const std::vector<int>& newPayload, const std::vector<int>& newPrefixSizes, CBSTContext& ctx);
+void unfillCBST(const std::vector<int>& keysToUnfill, const std::vector<int>& valuesToRemove, const std::vector<int>& removePrefixSizes, CBSTContext& ctx);
 
 // OO wrapper to manage CBST lifecycle and operations
 struct CBSTOperations {

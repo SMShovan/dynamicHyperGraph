@@ -16,6 +16,7 @@
 #include "../include/printUtils.hpp"
 #include "../include/structure.hpp"
 
+// id_to_index now defined only in main TU to avoid device linking complexities
 __device__ int id_to_index[128] = {
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -61,35 +62,9 @@ __device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc,
 
 
 
-__host__ __device__ int nextMultipleOf32(int num) {
-    return ((num + 32) / 32) * 32;
-}
-
-__host__ __device__ int nextMultipleOf4(int num) {
-    if (num == 0)
-        return 0;
-    return ((num + 4) / 4) * 4;
-}
-// Kernel to compute next multiple of 4 for each third element
-__global__ void computeNextMultipleOf4(int* partialSolution, int* tmp, int K)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < K)
-    {
-        int val = partialSolution[3*idx + 2];
-        tmp[idx] = nextMultipleOf4(val);
-    }
-}
-
-// Kernel to update partialSolution with the prefix sum results
-__global__ void updatePartialSolution(int* partialSolution, int* tmp, int K)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < K)
-    {
-        partialSolution[3*idx + 2] = tmp[idx];
-    }
-}
+// Device helpers and moved kernels are provided via kernel headers
+#include "../kernel/device_utils.cuh"
+#include "../kernel/kernels.cuh"
 std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
     std::vector<int> vec1d;
     std::vector<int> vec2dto1d(vec2d.size());
@@ -124,27 +99,11 @@ void checkCuda(cudaError_t result) {
 }
 
 
-__device__ int ceil_log2(int x) {
-    int log = 0;
-    while ((1 << log) < x) ++log;
-    return log;
-}
-__device__ int floor_log2(int x) {
-    int log = 0;
-    while (x >>= 1) ++log;
-    return log;
-}
+// ceil_log2 and floor_log2 are provided by kernel/device_utils.cuh
 
 // CBSTNode and CBSTContext are declared in structure.hpp
 
-// Forward declarations for kernels used below
-__global__ void buildEmptyBinaryTree(CBSTNode* nodes, int n);
-__global__ void storeItemsIntoNodes(CBSTNode* nodes, int* indices, int* values, int n, int totalSize);
-__global__ void printEachNode(CBSTNode* nodes, int n);
-__global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution);
-__global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize);
-__global__ void deleteNode(CBSTNode* nodes, int* deleteIndices, int deleteSize);
-__global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues);
+// Kernels included from kernel/*.cu via kernels.cuh
 
 // constructCBST moved to structure/operations.cu
 
@@ -152,301 +111,16 @@ __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize
 
 // deleteCBST moved to structure/operations.cu
 
-// Kernel to build an empty binary tree
-__global__ void buildEmptyBinaryTree(CBSTNode* nodes, int n) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < n) {
-        nodes[tid].index = tid;
-        nodes[tid].left = (2 * tid + 1 < n) ? &nodes[2 * tid + 1] : nullptr;
-        nodes[tid].right = (2 * tid + 2 < n) ? &nodes[2 * tid + 2] : nullptr;
-        nodes[tid].parent = (tid == 0) ? nullptr : &nodes[(tid - 1) / 2];
-    }
-}
-
-// Kernel to store items into internal nodes
-__global__ void storeItemsIntoNodes(CBSTNode* nodes, int* indices, int* values, int n, int totalSize) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < n) {
-        int log2_tid = floor_log2(tid + 1);
-        int log2_n = floor_log2(n);
-        int index =  ((2 * (tid + 1  - (1<<log2_tid))) + 1) * (1 << log2_n) / (1 << log2_tid);
-        int index2 = min(index, index - (index/2) + (n + 1 - (1<< log2_n)));
-        index2--;
-
-
-        // # if __CUDA_ARCH__>=200
-        //     printf("tid is %d \n", tid + 1);
-        //     printf("J(i) is %d \n", (tid + 1  - (1<<log2_tid)));
-        //     printf("log2_n is %d \n", log2_n);
-        //     printf("index is %d \n", index);
-        //     printf("size is %d \n", n);
-        // #endif
-
-        nodes[tid].size = totalSize;
-        if (index2 < n) {
-            nodes[tid].index = indices[index2];
-            nodes[tid].value = values[index2];
-            if (index2 < n - 1) {
-                nodes[tid].length = values[index2 + 1] - values[index2];
-            } else {
-                nodes[tid].length = totalSize - values[index2];
-            }
-        }
-    }
-}
 
 
 
-// Kernel to print each node from the device
-__global__ void printEachNode(CBSTNode* nodes, int n) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid <= n) {
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != tid) {
-            if (current->index > tid) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-        }
-        if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d, Size = %d\n",
-                   tid, current->index, current->value, current->length, current->size);
-        }
-    }
-}
-// Kernel to find and print nodes in the tree
-__global__ void findNode(CBSTNode* nodes, int* searchIndices, int searchSize) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < searchSize) {
-        int searchIndex = searchIndices[tid];
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != searchIndex) {
-            if (current->index > searchIndex) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-        }
-        if (current != nullptr) {
-            printf("Node %d: Index = %d, Value = %d, Length = %d\n",
-                   searchIndex, current->index, current->value, current->length);
-        } else {
-            printf("Node %d: Not Found\n", searchIndex);
-        }
-    }
-}
 
-__global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < searchSize) {
-        int searchIndex = searchIndices[tid];
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != searchIndex) {
-            if (current->index > searchIndex) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-        }
-        if (current != nullptr) {
-
-            int currLoc = current->value;
-            printf("\n");
-            while(flatValues[currLoc++] != INT_MIN)
-            {
-                printf("%d ", flatValues[currLoc]);
-            }
-            printf("\n");
-
-            printf("Node %d: Index = %d, Value = %d, Length = %d\n", searchIndex, current->index, current->value, current->length);
-        } else {
-            
-            printf("Node %d: Not Found\n", searchIndex);
-        }
-    }
-}
-
-// Mark avail = 1 for deleted keys
-__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < deleteSize) {
-        int key = deleteKeys[tid];
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != key) {
-            if (current->index > key) current = current->left; else current = current->right;
-        }
-        if (current != nullptr) {
-            // current->index matches key; compute its array index by pointer arithmetic
-            // Assuming nodes is a contiguous array
-            int idx = static_cast<int>(current - nodes);
-            avail[idx] = 1;
-        }
-    }
-}
-
-// Reduce avail bottom-up for [levelStart..levelEnd] range
-__global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail) {
-    int g = threadIdx.x + blockIdx.x * blockDim.x;
-    int idx = levelStart + g;
-    if (idx < 0 || idx > levelEnd || idx >= numRecords) return;
-    int left = 2 * idx + 1;
-    int right = 2 * idx + 2;
-    int leftSum = (left < numRecords) ? subtreeAvail[left] : 0;
-    int rightSum = (right < numRecords) ? subtreeAvail[right] : 0;
-    subtreeAvail[idx] = avail[idx] + leftSum + rightSum;
-}
-
-__global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < insertSize) {
-        int insertIndex = insertIndices[tid];
-        int* values;
-        int numValues; 
-        if (tid == 0){
-            values = insertValues;
-            numValues = insertSizes[tid];
-        }
-        else{
-            values = insertValues + insertSizes[tid - 1];
-            numValues = insertSizes[tid] - insertSizes[tid - 1];
-        }
-        // Search for the node by index
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != insertIndex) {
-            if (current->index > insertIndex) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-        }
-
-        // If node is found
-        if (current != nullptr) {
-            int valueIndex = current->value;
-            
-            // Navigate flatValues array to find the position to insert
-            for (int i = 0; i < numValues; ++i) {
-                bool isOverflow = false;
-                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN && flatValues[valueIndex] > 0) {
-                    
-                    // Needs to be tested
-                    if (flatValues[valueIndex] < 0)
-                    {
-                        valueIndex = flatValues[valueIndex] * (-1);
-                        continue;
-                    }
-                    if (flatValues[valueIndex + 1] == INT_MIN)
-                    {
-                        # if __CUDA_ARCH__>=200
-                            printf("Overflow of thread %d: position %d start %d of size %d \n", tid, valueIndex + 1, i, numValues - i);
-                            partialSolution[tid * 3] = valueIndex + 1;
-                            partialSolution[tid * 3 + 1] = i; 
-                            partialSolution[tid * 3 + 2] = numValues - i; 
-                        #endif
-                        isOverflow = true;
-                    }
-                    if (isOverflow)
-                    {
-                        break;
-                    }
-                    valueIndex++;
-                }
-                // Insert the new value
-                if (isOverflow)
-                    break;
-                if (flatValues[valueIndex] != INT_MIN)
-                    flatValues[valueIndex] = values[i];
-            }
-
-            // Update the node's value to the new index
-            current->value = valueIndex;
-        }
-    }
-}
-
-__global__ void deleteNode(
-    CBSTNode* nodes,
-    int* deleteIndices,
-    int deleteSize
-)
-{
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < deleteSize) {
-        int deleteIndex = deleteIndices[tid];
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != deleteIndex) {
-            if (current->index > deleteIndex) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-        }
-        if (current != nullptr) {
-            // Simple deletion logic - mark node as deleted by setting index to -1
-            current->index = -1;
-            current = current->parent;
-        }
-    }
-}
+// Moved delete/avail kernels are included via kernels.cuh
 
 
-__global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize){
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < insertSize) {
-        // int insertIndex = insertIndices[tid]; // Unused variable
-        int* values;
-        int numValues; 
-        if (tid == 0){
-            values = insertValues;
-            numValues = insertSizes[tid];
-        }
-        else{
-            values = insertValues + insertSizes[tid - 1];
-            numValues = insertSizes[tid] - insertSizes[tid - 1];
-        }
 
-        int idxPartialSolution = tid * 3;
-        int startPartialSolution = idxPartialSolution + 1;
-        int lenPartialSolution = idxPartialSolution + 2;
 
-        if (tid == 0)
-            if (partialSolution[lenPartialSolution] == 0)
-                return;
-        else
-            if (partialSolution[lenPartialSolution] == partialSolution[lenPartialSolution - 3] )
-                return;
-        
-        int startIdx; // int endIdx; // Unused variable
-        int storeStartIdx;
-        if (tid == 0)
-        {
-            startIdx = spaceAvailableFrom;
-
-        }
-        else 
-        {
-            startIdx = spaceAvailableFrom + partialSolution[idxPartialSolution - 1];
-        }
-
-        storeStartIdx = startIdx;
-
-        for (int i = partialSolution[startPartialSolution]; i < numValues; i++, startIdx++)
-        {
-            flatValues[startIdx] = values[i];
-        }
-
-        flatValues[storeStartIdx + partialSolution[lenPartialSolution] ] = INT_MIN;
-
-        flatValues[partialSolution[idxPartialSolution]] = storeStartIdx * (-1);
-
-        // # if __CUDA_ARCH__>=200
-        //     printf("infinity set: %d with len %d \n", storeStartIdx + partialSolution[lenPartialSolution], partialSolution[lenPartialSolution] );
-            
-        // #endif
-
-    }
-}
+// Payload kernels included via kernels.cuh
 
 void cumPartialSol(std::vector<int>& partialSolution){
     
@@ -461,73 +135,56 @@ void cumPartialSol(std::vector<int>& partialSolution){
     }
 }
 
+// Keep device helpers here to satisfy calls from updateCount in this TU
 __device__ int deg(int* d_h2vFlatvalues, int loc) {
     int count = 0;
-
-    while (d_h2vFlatvalues[loc] != 0 && d_h2vFlatvalues[loc] != INT_MIN )
-    {
+    while (d_h2vFlatvalues[loc] != 0 && d_h2vFlatvalues[loc] != INT_MIN ) {
         count++;
         loc++;
     }
-
     return count;
 }
-
 __device__ int con(int* d_h2vFlatvalues, int loc_a, int loc_b) {
     int count = 0;
     int i = loc_a;
     int j = loc_b;
     while (true) {
-        // Terminate if any element is INT_MIN or 0
         if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0) {
             break;
         }
-        
         if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j]) {
-            count++;  // Common item found
+            count++;
             i++;
             j++;
         } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j]) {
-            i++;  // Move pointer in arr1
+            i++;
         } else {
-            j++;  // Move pointer in arr2
+            j++;
         }
-
-        
     }
-
     return count;
 }
-
 __device__ int group(int* d_h2vFlatvalues, int loc_a, int loc_b, int loc_c) {
-    
     int i = loc_a, j = loc_b, k = loc_c;
     int count = 0;
-
-    // Use a single loop with three pointers
     while (true) {
-        // Terminate if any element is INT_MIN or 0 in any of the three arrays
-        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[k] == INT_MIN || 
+        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[k] == INT_MIN ||
             d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0 || d_h2vFlatvalues[k] == 0) {
             break;
         }
-
         if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j] && d_h2vFlatvalues[j] == d_h2vFlatvalues[k]) {
-            count++;  // Common item found in all three arrays
+            count++;
             i++;
             j++;
             k++;
         } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j] || d_h2vFlatvalues[i] < d_h2vFlatvalues[k]) {
-            i++;  // Move pointer in arr1
+            i++;
         } else if (d_h2vFlatvalues[j] < d_h2vFlatvalues[i] || d_h2vFlatvalues[j] < d_h2vFlatvalues[k]) {
-            j++;  // Move pointer in arr2
+            j++;
         } else {
-            k++;  // Move pointer in arr3
+            k++;
         }
-
-        
     }
-
     return count;
 }
 

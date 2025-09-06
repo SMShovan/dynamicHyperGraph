@@ -8,19 +8,9 @@
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
 
-// Forward declare kernels defined in main.cu
-__global__ void buildEmptyBinaryTree(CBSTNode* nodes, int n);
-__global__ void storeItemsIntoNodes(CBSTNode* nodes, int* indices, int* values, int n, int totalSize);
-__global__ void printEachNode(CBSTNode* nodes, int n);
-__global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices, int* insertValues, int* insertSizes, int insertSize, int* partialSolution);
-__global__ void computeNextMultipleOf4(int* partialSolution, int* tmp, int K);
-__global__ void updatePartialSolution(int* partialSolution, int* tmp, int K);
-__global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAvailableFrom, int* insertIndices, int* insertValues, int* insertSizes, int insertSize);
-__global__ void deleteNode(CBSTNode* nodes, int* deleteIndices, int deleteSize);
-__global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues);
-// Propagation kernels
-__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail);
-__global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail);
+// Kernel prototypes moved to kernel/kernels.cuh
+#include "../kernel/kernels.cuh"
+
 // Utility: dump node index and value to plain arrays
 __global__ void dumpNodeIndexValue(CBSTNode* nodes, int n, int* outIndex, int* outValue) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -28,64 +18,6 @@ __global__ void dumpNodeIndexValue(CBSTNode* nodes, int n, int* outIndex, int* o
         outIndex[tid] = nodes[tid].index;
         outValue[tid] = nodes[tid].value;
     }
-}
-// New kernel: place i-th insert into i-th deleted node
-__global__ void insertIntoDeletedKth(CBSTNode* nodes,
-                                     int* flatValues,
-                                     int* subtreeAvail,
-                                     int* avail,
-                                     int numRecords,
-                                     int* newKeys,
-                                     int* newPayload,
-                                     int* newPrefixSizes,
-                                     int* relocationPlan,
-                                     int K) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= K) return;
-    int k = tid + 1; // 1-based order statistic
-    int idx = 0;
-    while (idx < numRecords) {
-        int left = 2 * idx + 1;
-        int right = 2 * idx + 2;
-        int leftCount = (left < numRecords) ? subtreeAvail[left] : 0;
-        int self = avail[idx];
-        if (k <= leftCount) {
-            idx = left;
-            continue;
-        }
-        if (self == 1 && k == leftCount + 1) {
-            break; // found deleted node at idx
-        }
-        k -= leftCount + self;
-        idx = right;
-    }
-    // idx points to the target deleted node
-    CBSTNode* node = &nodes[idx];
-    int key = newKeys[tid];
-    int start = (tid == 0) ? 0 : newPrefixSizes[tid - 1];
-    int end = newPrefixSizes[tid];
-    int len = end - start;
-    int base = node->value;
-    int capacity = node->length - 1; // leave space for INT_MIN
-    if (len <= capacity) {
-        // write fully in-place
-        for (int i = 0; i < len; ++i) {
-            flatValues[base + i] = newPayload[start + i];
-        }
-        flatValues[base + len] = INT_MIN;
-    } else {
-        // write up to capacity, schedule relocation for the remainder
-        for (int i = 0; i < capacity; ++i) {
-            flatValues[base + i] = newPayload[start + i];
-        }
-        int idx3 = tid * 3;
-        relocationPlan[idx3] = base + capacity;        // location to place negative back-pointer
-        relocationPlan[idx3 + 1] = capacity;           // start offset in this payload
-        relocationPlan[idx3 + 2] = len - capacity;     // remaining length to append
-    }
-    // mark node re-used with new key and clear availability
-    node->index = key;
-    avail[idx] = 0;
 }
 
 // Local CUDA error checker for this TU
@@ -498,6 +430,22 @@ void CBSTOperations::findAndPrint(const std::vector<int>& ids) const {
     findContents<<<(ids.size() + 256 - 1) / 256, 256>>>(ctx_.d_nodes, d_search, ids.size(), ctx_.d_flatPayload);
     checkCuda(cudaDeviceSynchronize());
     checkCuda(cudaFree(d_search));
+}
+
+void unfillCBST(const std::vector<int>& keysToUnfill,
+                const std::vector<int>& valuesToRemove,
+                const std::vector<int>& removePrefixSizes,
+                CBSTContext& ctx) {
+    if (keysToUnfill.empty()) return;
+    // Reuse insert buffers for passing inputs
+    checkCuda(cudaMemcpy(ctx.d_insertKeys, keysToUnfill.data(), keysToUnfill.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(ctx.d_insertPayload, valuesToRemove.data(), valuesToRemove.size() * sizeof(int), cudaMemcpyHostToDevice));
+    checkCuda(cudaMemcpy(ctx.d_insertPrefixSizes, removePrefixSizes.data(), removePrefixSizes.size() * sizeof(int), cudaMemcpyHostToDevice));
+    int K = static_cast<int>(keysToUnfill.size());
+    int blockSize = 256;
+    int numBlocks = (K + blockSize - 1) / blockSize;
+    unfillKernel<<<numBlocks, blockSize>>>(ctx.d_nodes, ctx.d_flatPayload, ctx.d_insertKeys, ctx.d_insertPayload, ctx.d_insertPrefixSizes, K);
+    checkCuda(cudaDeviceSynchronize());
 }
 
 
