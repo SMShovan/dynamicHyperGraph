@@ -55,6 +55,9 @@ struct CBSTOperations {
     void erase(const std::vector<int>& deleteKeys);
     void findAndPrint(const std::vector<int>& ids) const;
 
+    // Accessor to underlying device-resident context (read-only)
+    const CBSTContext& context() const;
+
   private:
     CBSTContext ctx_{};
     bool constructed_ = false;

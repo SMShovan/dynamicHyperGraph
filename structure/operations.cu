@@ -432,6 +432,10 @@ void CBSTOperations::findAndPrint(const std::vector<int>& ids) const {
     checkCuda(cudaFree(d_search));
 }
 
+const CBSTContext& CBSTOperations::context() const {
+    return ctx_;
+}
+
 void unfillCBST(const std::vector<int>& keysToUnfill,
                 const std::vector<int>& valuesToRemove,
                 const std::vector<int>& removePrefixSizes,
