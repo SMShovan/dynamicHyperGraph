@@ -7,6 +7,7 @@
 #include <climits>
 #include <algorithm>
 #include <set>
+#include <unordered_map>
 // Include Thrust headers
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
@@ -15,56 +16,14 @@
 #include "../include/utils.hpp"
 #include "../include/printUtils.hpp"
 #include "../include/structure.hpp"
-
-// id_to_index now defined only in main TU to avoid device linking complexities
-__device__ int id_to_index[128] = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    21, 23, 22, 24, 23, 25, 24, 26,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    21, 22, 23, 24, 23, 24, 25, 26,
-    21, 23, 23, 25, 22, 24, 24, 26,
-    27, 28, 28, 29, 28, 29, 29, 30,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    5, 6, 6, 8, 7, 9, 9, 10,
-    5, 7, 6, 9, 6, 9, 8, 10,
-    11, 13, 12, 14, 13, 15, 14, 16,
-    5, 6, 7, 9, 6, 8, 9, 10,
-    11, 12, 13, 14, 13, 14, 15, 16,
-    11, 13, 13, 15, 12, 14, 14, 16,
-    17, 18, 18, 19, 18, 19, 19, 20
-};
-
-// CUDA Kernel to compute motif index and count occurrences
-__device__ void count_motif(int deg_a, int deg_b, int deg_c, int C_ab, int C_bc, int C_ca, int g_abc, int* motif_counts, int n, int idx) {
-
-
-    // int count = 0; // Unused variable
-
-    int a = deg_a - (C_ab + C_ca) + g_abc;
-    int b = deg_b - (C_bc + C_ab) + g_abc;
-    int c = deg_c - (C_ca + C_bc) + g_abc;
-    int d = C_ab - g_abc;
-    int e = C_bc - g_abc;
-    int f = C_ca - g_abc;
-    int g = g_abc;
-
-    int motif_id = (a > 0) + ((b > 0) << 1) + ((c > 0) << 2) + ((d > 0) << 3) + ((e > 0) << 4) + ((f > 0) << 5) + ((g > 0) << 6);
-    int index = id_to_index[motif_id] - 1;
-
-
-    // Store the count in the result array at index tid
-    motif_counts[idx + index]++;
-}
-
-
-
-
+#include "../include/graphGeneration.hpp"
+#include "../include/motif.hpp"
+#include "../include/motif_update.hpp"
 
 // Device helpers and moved kernels are provided via kernel headers
 #include "../kernel/device_utils.cuh"
 #include "../kernel/kernels.cuh"
+#include "../kernel/motif_utils.cuh"
 std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
     std::vector<int> vec1d;
     std::vector<int> vec2dto1d(vec2d.size());
@@ -122,189 +81,6 @@ void checkCuda(cudaError_t result) {
 
 // Payload kernels included via kernels.cuh
 
-void cumPartialSol(std::vector<int>& partialSolution){
-    
-    int cum = 0;
-    for (int i = 0; i < partialSolution.size(); i++)
-    {
-        if ((i + 1) % 3 == 0)
-        {
-            partialSolution[i] = nextMultipleOf4(partialSolution[i]) + cum;
-            cum = partialSolution[i];
-        }
-    }
-}
-
-// Keep device helpers here to satisfy calls from updateCount in this TU
-__device__ int deg(int* d_h2vFlatvalues, int loc) {
-    int count = 0;
-    while (d_h2vFlatvalues[loc] != 0 && d_h2vFlatvalues[loc] != INT_MIN ) {
-        count++;
-        loc++;
-    }
-    return count;
-}
-__device__ int con(int* d_h2vFlatvalues, int loc_a, int loc_b) {
-    int count = 0;
-    int i = loc_a;
-    int j = loc_b;
-    while (true) {
-        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0) {
-            break;
-        }
-        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j]) {
-            count++;
-            i++;
-            j++;
-        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j]) {
-            i++;
-        } else {
-            j++;
-        }
-    }
-    return count;
-}
-__device__ int group(int* d_h2vFlatvalues, int loc_a, int loc_b, int loc_c) {
-    int i = loc_a, j = loc_b, k = loc_c;
-    int count = 0;
-    while (true) {
-        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[k] == INT_MIN ||
-            d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0 || d_h2vFlatvalues[k] == 0) {
-            break;
-        }
-        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j] && d_h2vFlatvalues[j] == d_h2vFlatvalues[k]) {
-            count++;
-            i++;
-            j++;
-            k++;
-        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j] || d_h2vFlatvalues[i] < d_h2vFlatvalues[k]) {
-            i++;
-        } else if (d_h2vFlatvalues[j] < d_h2vFlatvalues[i] || d_h2vFlatvalues[j] < d_h2vFlatvalues[k]) {
-            j++;
-        } else {
-            k++;
-        }
-    }
-    return count;
-}
-
-__global__ void updateCount(CBSTNode * d_h2vNodes, int* d_h2vFlatvalues, 
-                            CBSTNode * d_v2hNodes, int* d_v2hFlatvalues, 
-                            CBSTNode * d_h2hNodes, int* d_h2hFlatvalues, int size, int * d_partialResults, int fixedSize) {
-
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < size) {
-// Partial result startPointer
-        // int* startPointer = d_partialResults + idx * 30; // Unused variable
-// Find the address of the starting node of the hyperedge idx
-        int searchIndex = idx;
-        CBSTNode* id_a = d_h2vNodes;
-        while (id_a != nullptr && id_a->index != searchIndex) {
-            if (id_a->index > searchIndex) {
-                id_a = id_a->left;
-            } else {
-                id_a = id_a->right;
-            }
-        }
-        if (id_a != nullptr) {
-            // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
-            //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
-
-            int loc_a = id_a->value;
-            
-
-// Now search por adjacent hyperedge of a
-            searchIndex = idx;
-            CBSTNode* id_b = d_h2vNodes;
-            while (id_b != nullptr && id_b->index != searchIndex) {
-                if (id_b->index > searchIndex) {
-                    id_b = id_b->left;
-                } else {
-                    id_b = id_b->right;
-                }
-            }
-            if (id_b != nullptr) {
-                // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
-                //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
-
-                int loc_b = id_b->value;
-                
-                int temp_loc_a = loc_a;
-                int temp_loc_b = loc_b;
-
-                while (true) {
-                // Terminate if any element is INT_MIN or 0
-                if (d_h2hFlatvalues[temp_loc_a] == INT_MIN || d_h2hFlatvalues[temp_loc_b] == INT_MIN || d_h2hFlatvalues[temp_loc_a] == 0 || d_h2hFlatvalues[temp_loc_b] == 0) {
-                    break;
-                }
-                
-                if (d_h2hFlatvalues[temp_loc_a] == d_h2hFlatvalues[temp_loc_b]) {
-// Now process triangles 
-                    searchIndex = d_h2hFlatvalues[temp_loc_a]; 
-
-                    CBSTNode* id_c = d_h2vNodes;
-                    while (id_c != nullptr && id_c->index != searchIndex) {
-                        if (id_c->index > searchIndex) {
-                            id_c = id_c->left;
-                        } else {
-                            id_c = id_c->right;
-                        }
-                    }
-                    if (id_c != nullptr) {
-                        // printf("Node %d: Index = %d, Value = %d, Length = %d, Color = %s\n",
-                        //        searchIndex, current->index, current->value, current->length, current->color ? "Black" : "Red");
-
-                        int loc_c = id_c->value;
-
-// Now get deg_(a,b,c), con_{(a,b),(b,c),(c,a)}, con_{(a,b,c)}
-                        int deg_a = deg(d_h2vFlatvalues, loc_a);
-                        int deg_b = deg(d_h2vFlatvalues, loc_b);
-                        int deg_c = deg(d_h2vFlatvalues, loc_c);
-
-                        int con_ab = con(d_h2vFlatvalues, loc_a, loc_b);
-                        int con_bc = con(d_h2vFlatvalues, loc_b, loc_c);
-                        int con_ca = con(d_h2vFlatvalues, loc_c, loc_a);
-
-                        int g_abc = group(d_h2vFlatvalues, loc_a, loc_b, loc_c);
-
-                        count_motif(deg_a, deg_b, deg_c, con_ab, con_bc, con_ca, g_abc, d_partialResults, 1, idx);
-
-                    
-                    }
-                    else{
-                        return;
-                    }
-
-                    
-                    temp_loc_a++;
-                    temp_loc_b++;
-                } else if (d_h2hFlatvalues[temp_loc_a] < d_h2hFlatvalues[temp_loc_b]) {
-                    temp_loc_a++;  // Move pointer in arr1
-                } else {
-                    temp_loc_b++;  // Move pointer in arr2
-                }
-
-                // Ensure we don't go out of bounds
-                if (temp_loc_a >= fixedSize || temp_loc_b >= fixedSize) {
-                    break;
-                }
-            }
-
-
-            } else {
-                return;
-            }
-
-        } else {
-            return;
-        }
-
-        
-    }
-}
-
-
 // operations moved to structure/operations.cu
 
 
@@ -339,41 +115,139 @@ int main(int argc, char* argv[]) {
     // Construct Complete Binary Search Trees (generic) for each dataset using OO wrapper
     int numVertices = static_cast<int>(vertexToHyperedge.size());
 
-    {
-        CBSTOperations h2vOps("H2V", params.payloadCapacity, params.alignment);
-        h2vOps.construct(cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
-                         h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()));
+    CBSTOperations h2vOps("H2V", params.payloadCapacity, params.alignment);
+    h2vOps.construct(cbstH2VKeys, cbstH2VStartOffsets, params.numHyperedges,
+                     h2vFlatVertexIds.data(), static_cast<int>(h2vFlatVertexIds.size()));
 
-        // Demo ops (optional)
-        std::vector<std::pair<int, std::vector<int>>> insertVector = {{2, {200 }}, {4, {400, 300, 310, 320, 330, 340, 350}}, {6, {600, 700, 650}}};
-        std::vector<int> demoInsertKeys;
-        std::vector<int> demoInsertPayload;
-        std::vector<int> demoInsertPrefixSizes(insertVector.size());
-        demoInsertKeys.reserve(insertVector.size());
-        for (size_t i = 0; i < insertVector.size(); ++i) {
-            demoInsertKeys.push_back(insertVector[i].first);
-            demoInsertPayload.insert(demoInsertPayload.end(), insertVector[i].second.begin(), insertVector[i].second.end());
-            demoInsertPrefixSizes[i] = (i == 0) ? static_cast<int>(insertVector[i].second.size())
-                                                : demoInsertPrefixSizes[i-1] + static_cast<int>(insertVector[i].second.size());
+    CBSTOperations v2hOps("V2H", params.payloadCapacity, params.alignment);
+    v2hOps.construct(cbstV2HKeys, cbstV2HStartOffsets, numVertices,
+                     v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()));
+
+    CBSTOperations h2hOps("H2H", params.payloadCapacity, params.alignment);
+    h2hOps.construct(cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
+                     h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()));
+
+    // Baseline motif counts
+    computeMotifCounts(h2vOps.context(), v2hOps.context(), h2hOps.context(), params.numHyperedges);
+
+    // --------------------------
+    // DeltaGeneration()
+    // --------------------------
+    // Choose deletions: sample last few IDs for demo
+    int N = params.numHyperedges;
+    int numDeletes = std::max(1, std::min(2, N));
+    std::vector<int> deletedIds;
+    for (int k = 0; k < numDeletes; ++k) deletedIds.push_back(N - k);
+    std::sort(deletedIds.begin(), deletedIds.end());
+
+    // Generate insertions: a bit more than deletions
+    int numInserts = numDeletes + 1;
+    auto generatedInserts = hyperedge2vertex(numInserts, params.maxVerticesPerHyperedge, params.minVertexId, params.maxVertexId);
+    // Assigned IDs: reuse smallest deleted first, then append new IDs after N
+    int reuseK = std::min(numDeletes, numInserts);
+    std::vector<int> insertAssignedIds(numInserts);
+    for (int i = 0; i < reuseK; ++i) insertAssignedIds[i] = deletedIds[i];
+    for (int i = reuseK; i < numInserts; ++i) insertAssignedIds[i] = N + (i - reuseK) + 1;
+
+    // --------------------------
+    // DataStructureUpdate() (host model for updated structures)
+    // --------------------------
+    // Build V2H removals: map vertex -> list of deleted hyperedge IDs
+    std::unordered_map<int, std::vector<int>> vRem;
+    for (int hId : deletedIds) {
+        if (hId >= 1 && hId <= static_cast<int>(hyperedgeToVertex.size())) {
+            for (int v : hyperedgeToVertex[hId - 1]) vRem[v].push_back(hId);
         }
-        h2vOps.insert(demoInsertKeys, demoInsertPayload, demoInsertPrefixSizes);
-        h2vOps.erase(std::vector<int>{2,4,6});
-        h2vOps.findAndPrint(std::vector<int>{1,2,3});
+    }
+    std::vector<int> v2hRemoveKeys, v2hRemoveValues, v2hRemovePrefix;
+    v2hRemoveKeys.reserve(vRem.size());
+    for (auto &kv : vRem) {
+        v2hRemoveKeys.push_back(kv.first);
+        for (int h : kv.second) v2hRemoveValues.push_back(h);
+        int newSize = (v2hRemovePrefix.empty() ? 0 : v2hRemovePrefix.back()) + static_cast<int>(kv.second.size());
+        v2hRemovePrefix.push_back(newSize);
     }
 
-    {
-        CBSTOperations v2hOps("V2H", params.payloadCapacity, params.alignment);
-        v2hOps.construct(cbstV2HKeys, cbstV2HStartOffsets, numVertices,
-                         v2hFlatHyperedgeIds.data(), static_cast<int>(v2hFlatHyperedgeIds.size()));
-        v2hOps.findAndPrint(std::vector<int>{1,2,3});
+    // Build V2H insertions: map vertex -> list of inserted (assigned) hyperedge IDs
+    std::unordered_map<int, std::vector<int>> vIns;
+    for (size_t i = 0; i < generatedInserts.size(); ++i) {
+        int hId = insertAssignedIds[i];
+        for (int v : generatedInserts[i]) vIns[v].push_back(hId);
+    }
+    std::vector<int> v2hInsertKeys, v2hInsertValues, v2hInsertPrefix;
+    v2hInsertKeys.reserve(vIns.size());
+    for (auto &kv : vIns) {
+        v2hInsertKeys.push_back(kv.first);
+        for (int h : kv.second) v2hInsertValues.push_back(h);
+        int newSize = (v2hInsertPrefix.empty() ? 0 : v2hInsertPrefix.back()) + static_cast<int>(kv.second.size());
+        v2hInsertPrefix.push_back(newSize);
     }
 
-    {
-        CBSTOperations h2hOps("H2H", params.payloadCapacity, params.alignment);
-        h2hOps.construct(cbstH2HKeys, cbstH2HStartOffsets, params.numHyperedges,
-                         h2hFlatAdjacency.data(), static_cast<int>(h2hFlatAdjacency.size()));
-        h2hOps.findAndPrint(std::vector<int>{1,2,3});
+    // H2V delete on device
+    h2vOps.erase(deletedIds);
+    // V2H unfill on device
+    if (!v2hRemoveKeys.empty()) {
+        unfillCBST(v2hRemoveKeys, v2hRemoveValues, v2hRemovePrefix, const_cast<CBSTContext&>(v2hOps.context()));
     }
+
+    // Prepare H2V insert payload vectors (keys, payload, prefix)
+    std::vector<int> h2vInsertKeys = insertAssignedIds;
+    std::vector<int> h2vInsertPayload;
+    std::vector<int> h2vInsertPrefix;
+    for (size_t i = 0; i < generatedInserts.size(); ++i) {
+        for (int v : generatedInserts[i]) h2vInsertPayload.push_back(v);
+        int newSize = (h2vInsertPrefix.empty() ? 0 : h2vInsertPrefix.back()) + static_cast<int>(generatedInserts[i].size());
+        h2vInsertPrefix.push_back(newSize);
+    }
+    // H2V insert on device (reuses deleted IDs first, appends surplus)
+    h2vOps.insert(h2vInsertKeys, h2vInsertPayload, h2vInsertPrefix);
+
+    // V2H fill on device
+    if (!v2hInsertKeys.empty()) {
+        fillCBST(v2hInsertKeys, v2hInsertValues, v2hInsertPrefix, const_cast<CBSTContext&>(v2hOps.context()));
+    }
+
+    // Host updated structures for rebuild H2H
+    // Apply deletions and insertions to host-side H2V representation
+    int maxId = std::max(N, insertAssignedIds.empty() ? N : *std::max_element(insertAssignedIds.begin(), insertAssignedIds.end()));
+    std::vector<std::vector<int>> updatedH2V = hyperedgeToVertex;
+    if (static_cast<int>(updatedH2V.size()) < maxId) updatedH2V.resize(maxId);
+    for (int hId : deletedIds) {
+        if (hId >= 1 && hId <= static_cast<int>(updatedH2V.size())) updatedH2V[hId - 1].clear();
+    }
+    for (size_t i = 0; i < generatedInserts.size(); ++i) {
+        int hId = insertAssignedIds[i];
+        if (hId >= 1) {
+            if (hId > static_cast<int>(updatedH2V.size())) updatedH2V.resize(hId);
+            updatedH2V[hId - 1] = generatedInserts[i];
+        }
+    }
+    // Rebuild V2H and H2H on host
+    auto updatedV2H = vertex2hyperedge(updatedH2V);
+    auto updatedH2H = hyperedgeAdjacency(updatedV2H, updatedH2V);
+
+    // Flatten and reconstruct updated CBSTs
+    auto [h2vFlatValsNew, h2vStartsNew] = flatten(updatedH2V, "Updated Hyperedge to Vertex");
+    auto [v2hFlatValsNew, v2hStartsNew] = flatten(updatedV2H, "Updated Vertex to Hyperedge");
+    auto [h2hFlatValsNew, h2hStartsNew] = flatten(updatedH2H, "Updated Hyperedge to Hyperedge");
+    auto [cbstH2VStartsNew, cbstH2VKeysNew] = prepareCBSTData(h2vStartsNew);
+    auto [cbstV2HStartsNew, cbstV2HKeysNew] = prepareCBSTData(v2hStartsNew);
+    auto [cbstH2HStartsNew, cbstH2HKeysNew] = prepareCBSTData(h2hStartsNew);
+
+    CBSTOperations h2vOpsNew("H2V-new", params.payloadCapacity, params.alignment);
+    h2vOpsNew.construct(cbstH2VKeysNew, cbstH2VStartsNew, maxId, h2vFlatValsNew.data(), static_cast<int>(h2vFlatValsNew.size()));
+    CBSTOperations v2hOpsNew("V2H-new", params.payloadCapacity, params.alignment);
+    v2hOpsNew.construct(cbstV2HKeysNew, cbstV2HStartsNew, static_cast<int>(updatedV2H.size()), v2hFlatValsNew.data(), static_cast<int>(v2hFlatValsNew.size()));
+    CBSTOperations h2hOpsNew("H2H-new", params.payloadCapacity, params.alignment);
+    h2hOpsNew.construct(cbstH2HKeysNew, cbstH2HStartsNew, maxId, h2hFlatValsNew.data(), static_cast<int>(h2hFlatValsNew.size()));
+
+    // --------------------------
+    // CountUpdate(): subtract on deleted frontier (old), add on inserted frontier (new)
+    // --------------------------
+    std::vector<int> deltaCounts;
+    computeMotifCountsDelta(h2vOps.context(), h2hOps.context(), h2vOpsNew.context(), h2hOpsNew.context(), deletedIds, insertAssignedIds, deltaCounts);
+    std::cout << "Motif delta counts (30 bins): ";
+    for (int i = 0; i < 30; ++i) std::cout << deltaCounts[i] << (i + 1 < 30 ? ' ' : '\n');
 
     // Clean up memory
     delete[] cbstH2VKeys;
