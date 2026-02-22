@@ -13,26 +13,58 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
 __global__ void computeNextMultipleOf4(int* partialSolution, int* tmp, int K);
 __global__ void updatePartialSolution(int* partialSolution, int* tmp, int K);
 
-// Delete / availability
-__global__ void deleteNode(CBSTNode* nodes, int* deleteIndices, int deleteSize);
-__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail);
+// Delete / availability (two-phase: locate then apply)
+__global__ void locateDeleteTargets(CBSTNode* nodes, int* deleteIndices, int deleteSize, int* outPositions);
+__global__ void applyDeletes(CBSTNode* nodes, int* positions, int deleteSize, int* avail);
 __global__ void reduceAvailLevel(int levelStart, int levelEnd, int numRecords, int* avail, int* subtreeAvail);
 
 // Lookup / find
 __global__ void findNode(CBSTNode* nodes, int* searchIndices, int searchSize);
 __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize, int* flatValues);
 
-// Insert reuse and unfill
-__global__ void insertIntoDeletedKth(CBSTNode* nodes,
-                                     int* flatValues,
-                                     int* subtreeAvail,
-                                     int* avail,
-                                     int numRecords,
-                                     int* newKeys,
-                                     int* newPayload,
-                                     int* newPrefixSizes,
-                                     int* relocationPlan,
-                                     int K);
+// Insert reuse (two-phase: locate then apply)
+__global__ void locateReusableSlots(int* subtreeAvail,
+                                    int* avail,
+                                    int numRecords,
+                                    int* outPositions,
+                                    int K);
+
+// Best-fit metadata extraction
+__global__ void extractSlotCapacities(CBSTNode* nodes,
+                                      int* positions,
+                                      int* outCapacities,
+                                      int D);
+__global__ void computeItemSizes(int* prefixSizes,
+                                 int* outSizes,
+                                 int K);
+
+// GPU-parallel best-fit matching
+__global__ void lowerBoundKernel(int* sortedCaps, int D,
+                                 int* sortedSizes, int M,
+                                 int* outLo);
+__global__ void computeBInPlace(int* lo, int M);
+__global__ void computeAssigned(int* prefixMax, int* assigned, int M);
+
+// Recover original keys for deleted-slot positions via CBST layout formula
+__global__ void extractKeysFromPositions(int* d_keys,
+                                         int* positions,
+                                         int* outKeys,
+                                         int numRecords,
+                                         int D);
+
+// Apply reuse with best-fit index mapping (uses deletedKeys for BST correctness)
+__global__ void applyReuse(CBSTNode* nodes,
+                           int* flatValues,
+                           int* avail,
+                           int* positions,
+                           int* newKeys,
+                           int* newPayload,
+                           int* newPrefixSizes,
+                           int* relocationPlan,
+                           int* matchedItemIndices,
+                           int* matchedSlotIndices,
+                           int* deletedKeys,
+                           int matchCount);
 
 __global__ void unfillKernel(CBSTNode* nodes,
                              int* flatValues,
@@ -40,5 +72,3 @@ __global__ void unfillKernel(CBSTNode* nodes,
                              int* valuesToRemove,
                              int* removePrefixSizes,
                              int K);
-
-

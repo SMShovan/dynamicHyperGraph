@@ -34,11 +34,18 @@ struct CBSTContext {
     int alignment;
 };
 
+// Mapping returned by insertCBST: for each input item i, itemToKey[i] is the
+// actual CBST key the item was stored under (may differ from newKeys[i] due to
+// best-fit matching reusing a deleted slot's key).
+struct InsertMapping {
+    std::vector<int> itemToKey;
+};
+
 // Host API for CBST operations (free functions)
 void constructCBST(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize, int payloadCapacity, const char* datasetName, CBSTContext& ctx);
 void fillCBST(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes, CBSTContext& ctx);
 void deleteCBST(const std::vector<int>& deleteKeys, CBSTContext& ctx);
-void insertCBST(const std::vector<int>& newKeys, const std::vector<int>& newPayload, const std::vector<int>& newPrefixSizes, CBSTContext& ctx);
+InsertMapping insertCBST(const std::vector<int>& newKeys, const std::vector<int>& newPayload, const std::vector<int>& newPrefixSizes, CBSTContext& ctx);
 void unfillCBST(const std::vector<int>& keysToUnfill, const std::vector<int>& valuesToRemove, const std::vector<int>& removePrefixSizes, CBSTContext& ctx);
 
 // OO wrapper to manage CBST lifecycle and operations
@@ -51,7 +58,8 @@ struct CBSTOperations {
     CBSTOperations& operator=(CBSTOperations&& other) noexcept;
 
     void construct(int* keys, int* startOffsets, int numRecords, int* flatPayload, int flatPayloadSize);
-    void insert(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes);
+    InsertMapping insert(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes);
+    void fill(const std::vector<int>& insertKeys, const std::vector<int>& insertPayload, const std::vector<int>& insertPrefixSizes);
     void erase(const std::vector<int>& deleteKeys);
     void findAndPrint(const std::vector<int>& ids) const;
 

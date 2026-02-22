@@ -34,7 +34,7 @@ __global__ void motifTriangleKernel(const CBSTNode* __restrict__ d_h2hNodes,
 
     // Enumerate neighbors j>i
     for (int off_j = loc_i; off_j < fixedSize; ++off_j) {
-        int j = d_h2hFlat[off_j];
+        int j = readFlat(d_h2hFlat, off_j);
         if (j == 0 || j == INT_MIN) break;
         if (j <= i) continue; // enforce i<j
 
@@ -49,8 +49,8 @@ __global__ void motifTriangleKernel(const CBSTNode* __restrict__ d_h2hNodes,
         // Intersect adjacency lists to find k; keep k>j
         int p = loc_i, q = loc_j;
         while (true) {
-            int a_val = d_h2hFlat[p];
-            int b_val = d_h2hFlat[q];
+            int a_val = readFlat(d_h2hFlat, p);
+            int b_val = readFlat(d_h2hFlat, q);
             if (a_val == 0 || a_val == INT_MIN || b_val == 0 || b_val == INT_MIN) break;
             if (a_val == b_val) {
                 int k = a_val;

@@ -40,7 +40,8 @@ __global__ void unfillKernel(CBSTNode* nodes,
             for (int z = w + 1; z < i; ++z) flatValues[segBase + z] = 0;
             break;
         } else if (endVal < 0) {
-            for (int z = w; z < i; ++z) flatValues[segBase + z] = 0;
+            flatValues[segBase + w] = endVal;
+            for (int z = w + 1; z < i; ++z) flatValues[segBase + z] = 0;
             segBase = -endVal;
             continue;
         } else {

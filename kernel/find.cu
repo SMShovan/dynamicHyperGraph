@@ -1,4 +1,5 @@
 #include "kernels.cuh"
+#include "motif_utils.cuh"
 #include <climits>
 #include <cstdio>
 
@@ -38,9 +39,11 @@ __global__ void findContents(CBSTNode* nodes, int* searchIndices, int searchSize
         if (current != nullptr) {
             int currLoc = current->value;
             printf("\n");
-            while(flatValues[currLoc++] != INT_MIN)
-            {
-                printf("%d ", flatValues[currLoc]);
+            while (true) {
+                int val = readFlat(flatValues, currLoc);
+                if (val == 0 || val == INT_MIN) break;
+                printf("%d ", val);
+                currLoc++;
             }
             printf("\n");
             printf("Node %d: Index = %d, Value = %d, Length = %d\n", searchIndex, current->index, current->value, current->length);

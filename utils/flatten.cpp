@@ -16,7 +16,7 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
     for (size_t i = 0; i < vec2d.size(); ++i) {
         startOffsets[i] = index;
         int innerSize = static_cast<int>(vec2d[i].size());
-        int paddedSize = nextMultipleOf4(innerSize);
+        int paddedSize = (innerSize == 0) ? 4 : nextMultipleOf4(innerSize);
         for (int j = 0; j < paddedSize; ++j) {
             if (j < innerSize) {
                 flatValues.push_back(vec2d[i][j]);

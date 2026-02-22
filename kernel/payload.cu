@@ -47,23 +47,15 @@ __global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices,
             int valueIndex = current->value;
             for (int i = 0; i < numValues; ++i) {
                 bool isOverflow = false;
-                while (flatValues[valueIndex] != 0 && flatValues[valueIndex] != INT_MIN && flatValues[valueIndex] > 0) {
-                    if (flatValues[valueIndex] < 0)
-                    {
-                        valueIndex = flatValues[valueIndex] * (-1);
-                        continue;
-                    }
-                    if (flatValues[valueIndex + 1] == INT_MIN)
-                    {
-                        # if __CUDA_ARCH__>=200
-                            partialSolution[tid * 3] = valueIndex + 1;
-                            partialSolution[tid * 3 + 1] = i;
-                            partialSolution[tid * 3 + 2] = numValues - i;
-                        #endif
+                while (true) {
+                    int val = flatValues[valueIndex];
+                    if (val == 0 || val == INT_MIN) break;
+                    if (val < 0) { valueIndex = -val; continue; }
+                    if (flatValues[valueIndex + 1] == INT_MIN) {
+                        partialSolution[tid * 3] = valueIndex + 1;
+                        partialSolution[tid * 3 + 1] = i;
+                        partialSolution[tid * 3 + 2] = numValues - i;
                         isOverflow = true;
-                    }
-                    if (isOverflow)
-                    {
                         break;
                     }
                     valueIndex++;
@@ -73,7 +65,6 @@ __global__ void insertNode(CBSTNode* nodes, int* flatValues, int* insertIndices,
                 if (flatValues[valueIndex] != INT_MIN)
                     flatValues[valueIndex] = values[i];
             }
-            current->value = valueIndex;
         }
     }
 }
@@ -96,12 +87,13 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
         int startPartialSolution = idxPartialSolution + 1;
         int lenPartialSolution = idxPartialSolution + 2;
 
-        if (tid == 0)
+        if (tid == 0) {
             if (partialSolution[lenPartialSolution] == 0)
                 return;
-        else
-            if (partialSolution[lenPartialSolution] == partialSolution[lenPartialSolution - 3] )
+        } else {
+            if (partialSolution[lenPartialSolution] == partialSolution[lenPartialSolution - 3])
                 return;
+        }
 
         int startIdx;
         int storeStartIdx;
@@ -122,8 +114,20 @@ __global__ void allocateSpace(int* partialSolution, int* flatValues, int spaceAv
             flatValues[startIdx] = values[i];
         }
 
-        flatValues[storeStartIdx + partialSolution[lenPartialSolution] ] = INT_MIN;
+        // Compute per-thread padded size (cumulative minus previous cumulative)
+        int perThreadPadded = (tid == 0)
+            ? partialSolution[lenPartialSolution]
+            : partialSolution[lenPartialSolution] - partialSolution[lenPartialSolution - 3];
 
+        // Zero gap between written data and sentinel
+        int numWritten = numValues - partialSolution[startPartialSolution];
+        for (int z = numWritten; z < perThreadPadded - 1; ++z)
+            flatValues[storeStartIdx + z] = 0;
+
+        // Sentinel at last position within padded space
+        flatValues[storeStartIdx + perThreadPadded - 1] = INT_MIN;
+
+        // Back-pointer from original chunk to this overflow location
         flatValues[partialSolution[idxPartialSolution]] = storeStartIdx * (-1);
     }
 }

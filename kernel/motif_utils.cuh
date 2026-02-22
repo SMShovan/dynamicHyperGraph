@@ -22,9 +22,25 @@ static __device__ int id_to_index[128] = {
     17, 18, 18, 19, 18, 19, 19, 20
 };
 
+// Follow back-pointer chains in a flat payload array.
+// Negative values (other than INT_MIN) are chain pointers: jump to -val.
+// On return, loc points to the resolved position.
+static inline __device__ int readFlat(const int* flat, int& loc) {
+    while (true) {
+        int val = flat[loc];
+        if (val < 0 && val != INT_MIN) {
+            loc = -val;
+            continue;
+        }
+        return val;
+    }
+}
+
 static inline __device__ int deg(int* d_h2vFlatvalues, int loc) {
     int count = 0;
-    while (d_h2vFlatvalues[loc] != 0 && d_h2vFlatvalues[loc] != INT_MIN ) {
+    while (true) {
+        int val = readFlat(d_h2vFlatvalues, loc);
+        if (val == 0 || val == INT_MIN) break;
         count++;
         loc++;
     }
@@ -36,14 +52,16 @@ static inline __device__ int con(int* d_h2vFlatvalues, int loc_a, int loc_b) {
     int i = loc_a;
     int j = loc_b;
     while (true) {
-        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0) {
+        int va = readFlat(d_h2vFlatvalues, i);
+        int vb = readFlat(d_h2vFlatvalues, j);
+        if (va == INT_MIN || vb == INT_MIN || va == 0 || vb == 0) {
             break;
         }
-        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j]) {
+        if (va == vb) {
             count++;
             i++;
             j++;
-        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j]) {
+        } else if (va < vb) {
             i++;
         } else {
             j++;
@@ -56,18 +74,20 @@ static inline __device__ int group(int* d_h2vFlatvalues, int loc_a, int loc_b, i
     int i = loc_a, j = loc_b, k = loc_c;
     int count = 0;
     while (true) {
-        if (d_h2vFlatvalues[i] == INT_MIN || d_h2vFlatvalues[j] == INT_MIN || d_h2vFlatvalues[k] == INT_MIN ||
-            d_h2vFlatvalues[i] == 0 || d_h2vFlatvalues[j] == 0 || d_h2vFlatvalues[k] == 0) {
+        int va = readFlat(d_h2vFlatvalues, i);
+        int vb = readFlat(d_h2vFlatvalues, j);
+        int vc = readFlat(d_h2vFlatvalues, k);
+        if (va == INT_MIN || va == 0 || vb == INT_MIN || vb == 0 || vc == INT_MIN || vc == 0) {
             break;
         }
-        if (d_h2vFlatvalues[i] == d_h2vFlatvalues[j] && d_h2vFlatvalues[j] == d_h2vFlatvalues[k]) {
+        if (va == vb && vb == vc) {
             count++;
             i++;
             j++;
             k++;
-        } else if (d_h2vFlatvalues[i] < d_h2vFlatvalues[j] || d_h2vFlatvalues[i] < d_h2vFlatvalues[k]) {
+        } else if (va < vb || va < vc) {
             i++;
-        } else if (d_h2vFlatvalues[j] < d_h2vFlatvalues[i] || d_h2vFlatvalues[j] < d_h2vFlatvalues[k]) {
+        } else if (vb < va || vb < vc) {
             j++;
         } else {
             k++;

@@ -1,9 +1,12 @@
 #include "kernels.cuh"
 
-__global__ void deleteNode(
+// Phase 1: Read-only BST traversal to locate array positions of delete targets.
+// Safe for concurrent threads since no node is modified.
+__global__ void locateDeleteTargets(
     CBSTNode* nodes,
     int* deleteIndices,
-    int deleteSize
+    int deleteSize,
+    int* outPositions
 )
 {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -18,23 +21,27 @@ __global__ void deleteNode(
             }
         }
         if (current != nullptr) {
-            current->index = -1;
-            current = current->parent;
+            outPositions[tid] = static_cast<int>(current - nodes);
+        } else {
+            outPositions[tid] = -1;
         }
     }
 }
 
-__global__ void markAvail(CBSTNode* nodes, int* deleteKeys, int deleteSize, int* avail) {
+// Phase 2: Apply deletions using precomputed positions. No traversal needed.
+__global__ void applyDeletes(
+    CBSTNode* nodes,
+    int* positions,
+    int deleteSize,
+    int* avail
+)
+{
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid < deleteSize) {
-        int key = deleteKeys[tid];
-        CBSTNode* current = nodes;
-        while (current != nullptr && current->index != key) {
-            if (current->index > key) current = current->left; else current = current->right;
-        }
-        if (current != nullptr) {
-            int idx = static_cast<int>(current - nodes);
-            avail[idx] = 1;
+        int pos = positions[tid];
+        if (pos >= 0) {
+            nodes[pos].index = -1;
+            avail[pos] = 1;
         }
     }
 }

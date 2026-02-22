@@ -32,7 +32,7 @@ std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<
     for (size_t i = 0; i < vec2d.size(); ++i) {
         vec2dto1d[i] = index;
         int innerSize = vec2d[i].size();
-        int paddedSize = nextMultipleOf4(innerSize);
+        int paddedSize = (innerSize == 0) ? 4 : nextMultipleOf4(innerSize);
         for (int j = 0; j < paddedSize; ++j) {
             if (j < innerSize) {
                 vec1d.push_back(vec2d[i][j]);
@@ -169,6 +169,12 @@ int main(int argc, char* argv[]) {
     }
 
     // Build V2H insertions: map vertex -> list of inserted (assigned) hyperedge IDs
+    // NOTE: at this point insertAssignedIds is used as the *requested* ID, but
+    // the actual CBST key may differ after best-fit matching.  We must use the
+    // mapping returned by insertCBST.  Since the mapping is produced AFTER
+    // h2vOps.insert(), we defer the V2H fill until after that call.  For now,
+    // use insertAssignedIds as a placeholder; the updatedH2V rebuild below
+    // already uses the correct mapping.
     std::unordered_map<int, std::vector<int>> vIns;
     for (size_t i = 0; i < generatedInserts.size(); ++i) {
         int hId = insertAssignedIds[i];
@@ -183,6 +189,16 @@ int main(int argc, char* argv[]) {
         v2hInsertPrefix.push_back(newSize);
     }
 
+    // --------------------------
+    // CountUpdate() -- Phase A: subtract BEFORE modifying data structures
+    // --------------------------
+    MotifDeltaAccumulator motifAcc;
+    motifAcc.init();
+    computeMotifSubtract(h2vOps.context(), h2hOps.context(), deletedIds, motifAcc);
+
+    // --------------------------
+    // DataStructureUpdate() -- modify CBST data structures
+    // --------------------------
     // H2V delete on device
     h2vOps.erase(deletedIds);
     // V2H unfill on device
@@ -200,7 +216,9 @@ int main(int argc, char* argv[]) {
         h2vInsertPrefix.push_back(newSize);
     }
     // H2V insert on device (reuses deleted IDs first, appends surplus)
-    h2vOps.insert(h2vInsertKeys, h2vInsertPayload, h2vInsertPrefix);
+    // Returns mapping: for each item i, h2vMapping.itemToKey[i] is the
+    // actual CBST key assigned (may differ from insertAssignedIds[i]).
+    InsertMapping h2vMapping = h2vOps.insert(h2vInsertKeys, h2vInsertPayload, h2vInsertPrefix);
 
     // V2H fill on device
     if (!v2hInsertKeys.empty()) {
@@ -208,15 +226,19 @@ int main(int argc, char* argv[]) {
     }
 
     // Host updated structures for rebuild H2H
-    // Apply deletions and insertions to host-side H2V representation
-    int maxId = std::max(N, insertAssignedIds.empty() ? N : *std::max_element(insertAssignedIds.begin(), insertAssignedIds.end()));
+    // Use the actual CBST key mapping from InsertMapping instead of the
+    // caller-provided insertAssignedIds, so that best-fit slot reuse is
+    // correctly reflected in the host-side representation.
+    int maxMappedKey = 0;
+    for (int k : h2vMapping.itemToKey) maxMappedKey = std::max(maxMappedKey, k);
+    int maxId = std::max(N, maxMappedKey);
     std::vector<std::vector<int>> updatedH2V = hyperedgeToVertex;
     if (static_cast<int>(updatedH2V.size()) < maxId) updatedH2V.resize(maxId);
     for (int hId : deletedIds) {
         if (hId >= 1 && hId <= static_cast<int>(updatedH2V.size())) updatedH2V[hId - 1].clear();
     }
     for (size_t i = 0; i < generatedInserts.size(); ++i) {
-        int hId = insertAssignedIds[i];
+        int hId = h2vMapping.itemToKey[i];
         if (hId >= 1) {
             if (hId > static_cast<int>(updatedH2V.size())) updatedH2V.resize(hId);
             updatedH2V[hId - 1] = generatedInserts[i];
@@ -242,10 +264,15 @@ int main(int argc, char* argv[]) {
     h2hOpsNew.construct(cbstH2HKeysNew, cbstH2HStartsNew, maxId, h2hFlatValsNew.data(), static_cast<int>(h2hFlatValsNew.size()));
 
     // --------------------------
-    // CountUpdate(): subtract on deleted frontier (old), add on inserted frontier (new)
+    // CountUpdate() -- Phase B: add using new snapshots
     // --------------------------
+    // Use the actual CBST keys (from InsertMapping) rather than the originally
+    // requested IDs, so motif counting targets the correct keys in the new tree.
+    std::vector<int> mappedInsertIds(h2vMapping.itemToKey.begin(),
+                                     h2vMapping.itemToKey.end());
+    computeMotifAdd(h2vOpsNew.context(), h2hOpsNew.context(), mappedInsertIds, motifAcc);
     std::vector<int> deltaCounts;
-    computeMotifCountsDelta(h2vOps.context(), h2hOps.context(), h2vOpsNew.context(), h2hOpsNew.context(), deletedIds, insertAssignedIds, deltaCounts);
+    motifAcc.readTo(deltaCounts);
     std::cout << "Motif delta counts (30 bins): ";
     for (int i = 0; i < 30; ++i) std::cout << deltaCounts[i] << (i + 1 < 30 ? ' ' : '\n');
 

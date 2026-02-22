@@ -1,16 +1,15 @@
 #include "kernels.cuh"
+#include "device_utils.cuh"
 #include <climits>
 
-__global__ void insertIntoDeletedKth(CBSTNode* nodes,
-                                     int* flatValues,
-                                     int* subtreeAvail,
-                                     int* avail,
-                                     int numRecords,
-                                     int* newKeys,
-                                     int* newPayload,
-                                     int* newPrefixSizes,
-                                     int* relocationPlan,
-                                     int K) {
+// Phase 1: Read-only order-statistic tree walk.
+// Each thread finds the k-th deleted node and writes its array position.
+// No modification to avail[] or nodes[], so concurrent reads are safe.
+__global__ void locateReusableSlots(int* subtreeAvail,
+                                    int* avail,
+                                    int numRecords,
+                                    int* outPositions,
+                                    int K) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= K) return;
     int k = tid + 1; // 1-based order statistic
@@ -25,18 +24,126 @@ __global__ void insertIntoDeletedKth(CBSTNode* nodes,
             continue;
         }
         if (self == 1 && k == leftCount + 1) {
-            break; // found deleted node at idx
+            break;
         }
         k -= leftCount + self;
         idx = right;
     }
-    CBSTNode* node = &nodes[idx];
-    int key = newKeys[tid];
-    int start = (tid == 0) ? 0 : newPrefixSizes[tid - 1];
-    int end = newPrefixSizes[tid];
+    outPositions[tid] = (idx < numRecords) ? idx : -1;
+}
+
+// ── Best-fit metadata extraction ────────────────────────────────────────
+
+// Extract usable capacity for each located deleted slot.
+// capacity = node->length - 1 (last position reserved for INT_MIN sentinel).
+__global__ void extractSlotCapacities(CBSTNode* nodes,
+                                      int* positions,
+                                      int* outCapacities,
+                                      int D) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= D) return;
+    int pos = positions[tid];
+    if (pos >= 0) {
+        outCapacities[tid] = nodes[pos].length - 1;
+    } else {
+        outCapacities[tid] = 0;
+    }
+}
+
+// Compute per-item payload size from prefix-sum array.
+__global__ void computeItemSizes(int* prefixSizes,
+                                 int* outSizes,
+                                 int K) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= K) return;
+    outSizes[tid] = (tid == 0) ? prefixSizes[0] : prefixSizes[tid] - prefixSizes[tid - 1];
+}
+
+// ── GPU-parallel best-fit matching kernels ──────────────────────────────
+
+// Binary search: for each sorted item, find first slot (in sorted capacity
+// order) with capacity >= item size.  Equivalent to std::lower_bound.
+__global__ void lowerBoundKernel(int* sortedCaps, int D,
+                                 int* sortedSizes, int M,
+                                 int* outLo) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= M) return;
+    int target = sortedSizes[tid];
+    int lo = 0, hi = D;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (sortedCaps[mid] < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    outLo[tid] = lo;
+}
+
+// In-place transform: b[i] = lo[i] - i
+__global__ void computeBInPlace(int* lo, int M) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < M) lo[tid] -= tid;
+}
+
+// assigned[i] = i + prefixMax[i]
+__global__ void computeAssigned(int* prefixMax, int* assigned, int M) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < M) assigned[tid] = tid + prefixMax[tid];
+}
+
+// Recover the original key for each located deleted-slot position.
+// Uses the same CBST layout formula as storeItemsIntoNodes (inverse mapping:
+// array position → in-order rank → d_keys[rank]).
+__global__ void extractKeysFromPositions(int* d_keys,
+                                         int* positions,
+                                         int* outKeys,
+                                         int numRecords,
+                                         int D) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= D) return;
+    int pos = positions[tid];
+    if (pos < 0) { outKeys[tid] = 0; return; }
+    int log2_pos = floor_log2(pos + 1);
+    int log2_n   = floor_log2(numRecords);
+    int index  = ((2 * (pos + 1 - (1 << log2_pos))) + 1) *
+                 (1 << log2_n) / (1 << log2_pos);
+    int index2 = min(index, index - (index / 2) + (numRecords + 1 - (1 << log2_n)));
+    index2--;
+    outKeys[tid] = d_keys[index2];
+}
+
+// ── Phase 2: Apply reuse ────────────────────────────────────────────────
+
+// Apply reuse using precomputed positions and best-fit index mapping.
+// matchedItemIndices[tid] selects the original item; matchedSlotIndices[tid]
+// selects which slot in positions[].  deletedKeys[] holds the original CBST
+// key for each slot so the BST ordering invariant is preserved.
+__global__ void applyReuse(CBSTNode* nodes,
+                           int* flatValues,
+                           int* avail,
+                           int* positions,
+                           int* newKeys,
+                           int* newPayload,
+                           int* newPrefixSizes,
+                           int* relocationPlan,
+                           int* matchedItemIndices,
+                           int* matchedSlotIndices,
+                           int* deletedKeys,
+                           int matchCount) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= matchCount) return;
+    int itemIdx = matchedItemIndices[tid];
+    int slotIdx = matchedSlotIndices[tid];
+    int pos = positions[slotIdx];
+    if (pos < 0) return;
+    CBSTNode* node = &nodes[pos];
+    int start = (itemIdx == 0) ? 0 : newPrefixSizes[itemIdx - 1];
+    int end = newPrefixSizes[itemIdx];
     int len = end - start;
     int base = node->value;
-    int capacity = node->length - 1; // leave space for INT_MIN
+    int capacity = node->length - 1;
     if (len <= capacity) {
         for (int i = 0; i < len; ++i) {
             flatValues[base + i] = newPayload[start + i];
@@ -47,12 +154,11 @@ __global__ void insertIntoDeletedKth(CBSTNode* nodes,
             flatValues[base + i] = newPayload[start + i];
         }
         int idx3 = tid * 3;
-        relocationPlan[idx3] = base + capacity;        // location to place negative back-pointer
-        relocationPlan[idx3 + 1] = capacity;           // start offset in this payload
-        relocationPlan[idx3 + 2] = len - capacity;     // remaining length to append
+        relocationPlan[idx3] = base + capacity;
+        relocationPlan[idx3 + 1] = capacity;
+        relocationPlan[idx3 + 2] = len - capacity;
     }
-    node->index = key;
-    avail[idx] = 0;
+    // Write the SLOT's original key (not the item's key) to preserve BST order
+    node->index = deletedKeys[slotIdx];
+    avail[pos] = 0;
 }
-
-
