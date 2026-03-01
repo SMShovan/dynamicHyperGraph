@@ -2,6 +2,18 @@
 
 // Common device/host helpers used by kernels
 
+// Portable atomic add for signed long long (not all CUDA versions provide atomicAdd(long long*, long long))
+static inline __device__ long long atomicAdd_sll(long long* address, long long val) {
+  unsigned long long* address_as_ull = (unsigned long long*)address;
+  unsigned long long old = *address_as_ull, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(address_as_ull, assumed,
+                    (unsigned long long)((long long)assumed + val));
+  } while (assumed != old);
+  return (long long)old;
+}
+
 static inline __host__ __device__ int nextMultipleOf32(int num) {
     return ((num + 32) / 32) * 32;
 }

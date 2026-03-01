@@ -101,9 +101,9 @@ type1FrontierKernel(const CBSTNode *__restrict__ d_h2vNodes,
     c = (nn * (nn - 1) * (nn - 2)) / 6;
   }
   if (IsAddition) {
-    atomicAdd(d_delta, c);
+    atomicAdd_sll(d_delta, c);
   } else {
-    atomicAdd(d_delta, -c);
+    atomicAdd_sll(d_delta, -c);
   }
 }
 

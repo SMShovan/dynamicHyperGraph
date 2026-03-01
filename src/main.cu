@@ -24,31 +24,6 @@
 #include "../kernel/device_utils.cuh"
 #include "../kernel/kernels.cuh"
 #include "../kernel/motif_utils.cuh"
-std::pair<std::vector<int>, std::vector<int>> flatten2DVector(const std::vector<std::vector<int>>& vec2d) {
-    std::vector<int> vec1d;
-    std::vector<int> vec2dto1d(vec2d.size());
-
-    int index = 0;
-    for (size_t i = 0; i < vec2d.size(); ++i) {
-        vec2dto1d[i] = index;
-        int innerSize = vec2d[i].size();
-        int paddedSize = (innerSize == 0) ? 4 : nextMultipleOf4(innerSize);
-        for (int j = 0; j < paddedSize; ++j) {
-            if (j < innerSize) {
-                vec1d.push_back(vec2d[i][j]);
-            } else if (j == paddedSize - 1) {
-                vec1d.push_back(INT_MIN); // Padding with negative infinity
-            } else {
-                vec1d.push_back(0); // Padding with zeros
-            }
-            ++index;
-        }
-    }
-
-    return {vec1d, vec2dto1d};
-}
-
-
 
 void checkCuda(cudaError_t result) {
     if (result != cudaSuccess) {

@@ -185,9 +185,9 @@ __global__ void type2FrontierKernel(
   }
 
   if (IsAddition) {
-    atomicAdd(d_delta, acc);
+    atomicAdd_sll(d_delta, acc);
   } else {
-    atomicAdd(d_delta, -acc);
+    atomicAdd_sll(d_delta, -acc);
   }
 }
 

@@ -2,7 +2,7 @@
 # Compiler and flags
 NVCC = nvcc
 CXX = g++
-NVCC_FLAGS = -std=c++17 -O2
+NVCC_FLAGS = -std=c++17 -O2 -arch=sm_86
 CXX_FLAGS = -std=c++17 -O2 -Wall
 
 # Directories
@@ -22,7 +22,7 @@ CUDA_SOURCES = $(SRC_DIR)/main.cu $(SRC_DIR)/HMotifCount.cu $(SRC_DIR)/HMotifCou
                $(KERNEL_DIR)/insert_reuse.cu $(KERNEL_DIR)/unfill.cu \
                $(KERNEL_DIR)/payload.cu $(KERNEL_DIR)/build_tree.cu \
                $(KERNEL_DIR)/delete_avail.cu $(KERNEL_DIR)/find.cu
-CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp $(UTILS_DIR)/utils.cpp $(UTILS_DIR)/printUtils.cpp
+CPP_SOURCES = $(SRC_DIR)/graphGeneration.cpp $(UTILS_DIR)/utils.cpp $(UTILS_DIR)/printUtils.cpp $(UTILS_DIR)/flatten.cpp
 HEADERS = $(INCLUDE_DIR)/graphGeneration.hpp $(INCLUDE_DIR)/utils.hpp $(INCLUDE_DIR)/printUtils.hpp
 
 # Object files (main entry point)
@@ -30,7 +30,7 @@ CUDA_OBJECTS = $(BUILD_DIR)/main.o $(BUILD_DIR)/HMotifCount.o $(BUILD_DIR)/HMoti
                $(BUILD_DIR)/insert_reuse.o $(BUILD_DIR)/unfill.o \
                $(BUILD_DIR)/payload.o $(BUILD_DIR)/build_tree.o \
                $(BUILD_DIR)/delete_avail.o $(BUILD_DIR)/find.o
-CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o $(BUILD_DIR)/utils.o $(BUILD_DIR)/printUtils.o
+CPP_OBJECTS = $(BUILD_DIR)/graphGeneration.o $(BUILD_DIR)/utils.o $(BUILD_DIR)/printUtils.o $(BUILD_DIR)/flatten.o
 
 # Shared CUDA objects (everything except the entry-point .o files)
 SHARED_CUDA_OBJECTS = $(BUILD_DIR)/HMotifCount.o $(BUILD_DIR)/HMotifCountUpdate.o $(BUILD_DIR)/operations.o \
