@@ -10,6 +10,9 @@ struct CBSTNode {
     int value;
     int length;
     int size;
+    int occupancy;    // number of data elements in the active (tail) segment
+    int tailBase;     // base offset of the last segment in flatPayload
+    int tailCapacity; // usable capacity of the tail segment (excludes sentinel)
     CBSTNode* left;
     CBSTNode* right;
     CBSTNode* parent;
