@@ -9,6 +9,7 @@ build/
 *.cubin
 *.fatbin
 *.ptx
+*.pdf
 
 # IDE files
 .vscode/

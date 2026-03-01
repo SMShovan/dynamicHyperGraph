@@ -14,6 +14,7 @@ TARGET = $(BUILD_DIR)/main
 TARGET_TYPE1 = $(BUILD_DIR)/type1
 TARGET_TYPE2 = $(BUILD_DIR)/type2
 TARGET_TYPE3 = $(BUILD_DIR)/type3
+TARGET_COARSE = $(BUILD_DIR)/coarseTriangle
 
 # Source files
 STRUCT_DIR = structure
@@ -41,8 +42,8 @@ SHARED_CUDA_OBJECTS = $(BUILD_DIR)/HMotifCount.o $(BUILD_DIR)/HMotifCountUpdate.
 # Default target
 all: $(TARGET)
 
-# Build all executables (main + type1 + type2 + type3)
-all-types: $(TARGET) $(TARGET_TYPE1) $(TARGET_TYPE2) $(TARGET_TYPE3)
+# Build all executables (main + type1 + type2 + type3 + coarseTriangle)
+all-types: $(TARGET) $(TARGET_TYPE1) $(TARGET_TYPE2) $(TARGET_TYPE3) $(TARGET_COARSE)
 
 # Build the main executable
 $(TARGET): $(CUDA_OBJECTS) $(CPP_OBJECTS)
@@ -56,6 +57,9 @@ $(TARGET_TYPE2): $(BUILD_DIR)/type2.o $(SHARED_CUDA_OBJECTS) $(CPP_OBJECTS)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $^
 
 $(TARGET_TYPE3): $(BUILD_DIR)/type3.o $(SHARED_CUDA_OBJECTS) $(CPP_OBJECTS)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $^
+
+$(TARGET_COARSE): $(BUILD_DIR)/coarseTriangle.o $(SHARED_CUDA_OBJECTS) $(CPP_OBJECTS)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $^
 
 # Compile CUDA source files
@@ -97,8 +101,11 @@ run-type2: $(TARGET_TYPE2)
 run-type3: $(TARGET_TYPE3)
 	$(TARGET_TYPE3) 8 5 1 100 4096
 
-# Run all executables sequentially (main + type1 + type2 + type3)
-run-all: $(TARGET) $(TARGET_TYPE1) $(TARGET_TYPE2) $(TARGET_TYPE3)
+run-coarse: $(TARGET_COARSE)
+	$(TARGET_COARSE) 8 5 1 100 4096
+
+# Run all executables sequentially (main + type1 + type2 + type3 + coarseTriangle)
+run-all: $(TARGET) $(TARGET_TYPE1) $(TARGET_TYPE2) $(TARGET_TYPE3) $(TARGET_COARSE)
 	@echo "=== Running main (30-bin motif counts) ==="
 	$(TARGET) 8 5 1 100 4096
 	@echo ""
@@ -110,6 +117,9 @@ run-all: $(TARGET) $(TARGET_TYPE1) $(TARGET_TYPE2) $(TARGET_TYPE3)
 	@echo ""
 	@echo "=== Running Type3 motif ==="
 	$(TARGET_TYPE3) 8 5 1 100 4096
+	@echo ""
+	@echo "=== Running Coarse paper-style triangle counts ==="
+	$(TARGET_COARSE) 8 5 1 100 4096
 
 # Run with custom parameters (usage: make run-custom ARGS="10 3 1 50 8192")
 run-custom: $(TARGET)
@@ -130,11 +140,12 @@ install:
 help:
 	@echo "Available targets:"
 	@echo "  all         - Build the main executable (default)"
-	@echo "  all-types   - Build all executables (main + type1 + type2 + type3)"
+	@echo "  all-types   - Build all executables (main + type1 + type2 + type3 + coarseTriangle)"
 	@echo "  run         - Build and run main with default parameters (8 5 1 100 4096)"
 	@echo "  run-type1   - Build and run type1 motif counter"
 	@echo "  run-type2   - Build and run type2 motif counter"
 	@echo "  run-type3   - Build and run type3 motif counter"
+	@echo "  run-coarse  - Build and run paper-style coarse triangle counter"
 	@echo "  run-all     - Build and run all executables sequentially"
 	@echo "  run-custom  - Run with custom parameters (make run-custom ARGS=\"10 3 1 50 8192\")"
 	@echo "  clean       - Remove build artifacts"
@@ -145,9 +156,10 @@ help:
 	@echo "Usage examples:"
 	@echo "  make run                    # Run with default: 8 hyperedges, 5 max vertices, IDs 1-100, capacity 4096"
 	@echo "  make run-type1              # Run type1 motif counter with defaults"
+	@echo "  make run-coarse             # Run paper-style coarse triangle counter with defaults"
 	@echo "  make run-all                # Run all motif counters sequentially"
 	@echo "  make run-custom ARGS=\"10 3 1 50 8192\"  # Run with: 10 hyperedges, 3 max vertices, IDs 1-50, capacity 8192"
 	@echo "  ./build/main 20 4 1 200 16384    # Direct execution with custom capacity"
 
 # Phony targets
-.PHONY: all all-types run run-type1 run-type2 run-type3 run-all run-custom clean rebuild install help
+.PHONY: all all-types run run-type1 run-type2 run-type3 run-coarse run-all run-custom clean rebuild install help
